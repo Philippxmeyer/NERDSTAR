@@ -33,7 +33,7 @@ constexpr uint8_t SDA_PIN = 21;
 constexpr uint8_t SCL_PIN = 22;
 
 // SD card chip select
-constexpr uint8_t SD_CS_PIN = 15;
+constexpr uint8_t SD_CS_PIN = 5;
 
 // Driver configuration
 constexpr float R_SENSE = 0.11f;
