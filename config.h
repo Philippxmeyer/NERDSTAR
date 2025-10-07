@@ -4,14 +4,14 @@
 
 namespace config {
 
-// Stepper driver pins for Right Ascension axis (formerly AZ)
+// Stepper driver pins for Azimuth axis
 constexpr uint8_t EN_RA = 27;
 constexpr uint8_t DIR_RA = 26;
 constexpr uint8_t STEP_RA = 25;
 constexpr uint8_t UART_RA_TX = 17;
 constexpr uint8_t UART_RA_RX = 16;
 
-// Stepper driver pins for Declination axis (formerly ALT)
+// Stepper driver pins for Altitude axis
 constexpr uint8_t EN_DEC = 14;
 constexpr uint8_t DIR_DEC = 12;
 constexpr uint8_t STEP_DEC = 13;
@@ -56,6 +56,8 @@ constexpr uint8_t OLED_HEIGHT = 64;
 constexpr double SIDEREAL_DAY_SECONDS = 86164.0905;
 constexpr double POLARIS_RA_HOURS = 2.530301;     // 02h 31m 49s
 constexpr double POLARIS_DEC_DEGREES = 89.2641;   // +89° 15' 50"
+constexpr double OBSERVER_LATITUDE_DEG = 52.5200;  // Default: Berlin
+constexpr double OBSERVER_LONGITUDE_DEG = 13.4050; // East positive
 
 } // namespace config
 

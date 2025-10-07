@@ -8,6 +8,8 @@ struct SystemConfig {
   uint32_t magic;
   JoystickCalibration joystickCalibration;
   AxisCalibration axisCalibration;
+  BacklashConfig backlash;
+  GotoProfile gotoProfile;
   bool joystickCalibrated;
   bool axisCalibrated;
   bool polarAligned;
@@ -20,6 +22,8 @@ bool init();
 const SystemConfig& getConfig();
 void setJoystickCalibration(const JoystickCalibration& calibration);
 void setAxisCalibration(const AxisCalibration& calibration);
+void setBacklash(const BacklashConfig& backlash);
+void setGotoProfile(const GotoProfile& profile);
 void setPolarAligned(bool aligned);
 void setRtcEpoch(uint32_t epoch);
 void save();

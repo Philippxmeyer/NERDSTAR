@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <math.h>
 #include <stdlib.h>
+#include <limits.h>
 
 #include "catalog.h"
 #include "config.h"
@@ -31,6 +32,8 @@ enum class UiState {
   SetRtc,
   CatalogBrowser,
   AxisCalibration,
+  GotoSpeed,
+  BacklashCalibration,
 };
 
 UiState uiState = UiState::MainMenu;
@@ -49,13 +52,85 @@ RtcEditState rtcEdit{2024, 1, 1, 0, 0, 0, 0};
 
 struct AxisCalibrationState {
   int step;
-  int64_t raZero;
-  int64_t raOneHour;
-  int64_t decZero;
-  int64_t decSpan;
+  int64_t azZero;
+  int64_t azReference;
+  int64_t altZero;
+  int64_t altReference;
 };
 
 AxisCalibrationState axisCal{0, 0, 0, 0, 0};
+
+struct GotoProfileSteps {
+  double maxSpeedAz;
+  double accelerationAz;
+  double decelerationAz;
+  double maxSpeedAlt;
+  double accelerationAlt;
+  double decelerationAlt;
+};
+
+struct AxisGotoRuntime {
+  int64_t finalTarget;
+  int64_t compensatedTarget;
+  double currentSpeed;
+  int8_t desiredDirection;
+  bool compensationPending;
+  bool reachedFinalTarget;
+};
+
+struct GotoRuntimeState {
+  bool active;
+  AxisGotoRuntime az;
+  AxisGotoRuntime alt;
+  GotoProfileSteps profile;
+  double estimatedDurationSec;
+  uint32_t lastUpdateMs;
+  DateTime startTime;
+  double targetRaHours;
+  double targetDecDegrees;
+  int targetCatalogIndex;
+};
+
+struct TrackingState {
+  bool active;
+  double targetRaHours;
+  double targetDecDegrees;
+  int targetCatalogIndex;
+  double offsetAzDeg;
+  double offsetAltDeg;
+  bool userAdjusting;
+};
+
+GotoRuntimeState gotoRuntime{false,
+                             {0, 0, 0.0, 0, false, false},
+                             {0, 0, 0.0, 0, false, false},
+                             {0.0, 0.0, 0.0, 0.0, 0.0, 0.0},
+                             0.0,
+                             0,
+                             DateTime(),
+                             0.0,
+                             0.0,
+                             -1};
+
+TrackingState tracking{false, 0.0, 0.0, -1, 0.0, 0.0, false};
+
+struct GotoSpeedState {
+  float maxSpeed;
+  float acceleration;
+  float deceleration;
+  int fieldIndex;
+};
+
+struct BacklashCalibrationState {
+  int step;
+  int64_t azStart;
+  int64_t azEnd;
+  int64_t altStart;
+  int64_t altEnd;
+};
+
+GotoSpeedState gotoSpeedState{0.0f, 0.0f, 0.0f, 0};
+BacklashCalibrationState backlashState{0, 0, 0, 0, 0};
 
 String selectedObjectName;
 String gotoTargetName;
@@ -66,7 +141,8 @@ constexpr const char* kMainMenuItems[] = {
 constexpr size_t kMainMenuCount = sizeof(kMainMenuItems) / sizeof(kMainMenuItems[0]);
 
 int setupMenuIndex = 0;
-constexpr const char* kSetupMenuItems[] = {"Set RTC", "Cal Joystick", "Cal Axes", "Back"};
+constexpr const char* kSetupMenuItems[] = {
+    "Set RTC", "Cal Joystick", "Cal Axes", "Goto Speed", "Cal Backlash", "Back"};
 constexpr size_t kSetupMenuCount = sizeof(kSetupMenuItems) / sizeof(kSetupMenuItems[0]);
 
 int catalogIndex = 0;
@@ -147,38 +223,150 @@ bool fetchInfoMessage(String& message) {
   return active;
 }
 
-double getObjectCoordinates(const CatalogObject& object, double& dec) {
-  double ra = object.raHours;
-  dec = object.decDegrees;
+double degToRad(double degrees) { return degrees * DEG_TO_RAD; }
+
+double radToDeg(double radians) { return radians * RAD_TO_DEG; }
+
+double wrapAngle360(double degrees) {
+  double wrapped = fmod(degrees, 360.0);
+  if (wrapped < 0.0) wrapped += 360.0;
+  return wrapped;
+}
+
+double wrapAngle180(double degrees) {
+  double wrapped = fmod(degrees + 180.0, 360.0);
+  if (wrapped < 0.0) wrapped += 360.0;
+  return wrapped - 180.0;
+}
+
+double shortestAngularDistance(double from, double to) {
+  double diff = wrapAngle180(to - from);
+  return diff;
+}
+
+DateTime currentDateTime() {
+  if (rtcAvailable) {
+    return rtc.now();
+  }
+  if (storage::getConfig().lastRtcEpoch != 0) {
+    return DateTime(storage::getConfig().lastRtcEpoch);
+  }
+  return DateTime(2024, 1, 1, 0, 0, 0);
+}
+
+double hourFraction(const DateTime& time) {
+  return time.hour() + time.minute() / 60.0 + time.second() / 3600.0;
+}
+
+double localSiderealDegrees(const DateTime& time) {
+  double jd = planets::julianDay(time.year(), time.month(), time.day(), hourFraction(time));
+  double T = (jd - 2451545.0) / 36525.0;
+  double lst = 280.46061837 + 360.98564736629 * (jd - 2451545.0) +
+               0.000387933 * T * T - (T * T * T) / 38710000.0 + config::OBSERVER_LONGITUDE_DEG;
+  return wrapAngle360(lst);
+}
+
+void getObjectRaDecAt(const CatalogObject& object,
+                      const DateTime& when,
+                      double secondsAhead,
+                      double& raHours,
+                      double& decDegrees,
+                      DateTime* futureTime) {
+  DateTime future = when + TimeSpan(0, 0, 0, static_cast<int32_t>(secondsAhead));
+  double fractional = secondsAhead - floor(secondsAhead);
+  double hour = future.hour() + future.minute() / 60.0 +
+                (future.second() + fractional) / 3600.0;
+  raHours = object.raHours;
+  decDegrees = object.decDegrees;
+
+  if (futureTime) {
+    *futureTime = future;
+  }
+
   PlanetId planetId;
-  if (object.type.equalsIgnoreCase("planet") && rtcAvailable &&
+  if (object.type.equalsIgnoreCase("planet") &&
       planets::planetFromString(object.name, planetId)) {
-    DateTime now = rtc.now();
-    double hourFraction = now.hour() + now.minute() / 60.0 + now.second() / 3600.0;
-    double jd = planets::julianDay(now.year(), now.month(), now.day(), hourFraction);
+    double jd = planets::julianDay(future.year(), future.month(), future.day(), hour);
     PlanetPosition position;
     if (planets::computePlanet(planetId, jd, position)) {
-      ra = position.raHours;
-      dec = position.decDegrees;
+      raHours = position.raHours;
+      decDegrees = position.decDegrees;
     }
   }
-  return ra;
+}
+
+bool raDecToAltAz(const DateTime& when,
+                  double raHours,
+                  double decDegrees,
+                  double& azimuthDeg,
+                  double& altitudeDeg) {
+  double lstDeg = localSiderealDegrees(when);
+  double raDeg = raHours * 15.0;
+  double haDeg = wrapAngle180(lstDeg - raDeg);
+  double latRad = degToRad(config::OBSERVER_LATITUDE_DEG);
+  double haRad = degToRad(haDeg);
+  double decRad = degToRad(decDegrees);
+
+  double sinAlt = sin(decRad) * sin(latRad) + cos(decRad) * cos(latRad) * cos(haRad);
+  sinAlt = std::clamp(sinAlt, -1.0, 1.0);
+  altitudeDeg = radToDeg(asin(sinAlt));
+
+  double cosAz = (sin(decRad) - sinAlt * sin(latRad)) / (cos(degToRad(altitudeDeg)) * cos(latRad));
+  cosAz = std::clamp(cosAz, -1.0, 1.0);
+  double azRad = acos(cosAz);
+  if (sin(haRad) > 0) {
+    azRad = 2 * PI - azRad;
+  }
+  azimuthDeg = wrapAngle360(radToDeg(azRad));
+  return altitudeDeg > -5.0;  // allow slight tolerance below horizon
+}
+
+GotoProfileSteps toProfileSteps(const GotoProfile& profile, const AxisCalibration& cal) {
+  GotoProfileSteps result{};
+  result.maxSpeedAz = profile.maxSpeedDegPerSec * cal.stepsPerDegreeAz;
+  result.accelerationAz = profile.accelerationDegPerSec2 * cal.stepsPerDegreeAz;
+  result.decelerationAz = profile.decelerationDegPerSec2 * cal.stepsPerDegreeAz;
+  result.maxSpeedAlt = profile.maxSpeedDegPerSec * cal.stepsPerDegreeAlt;
+  result.accelerationAlt = profile.accelerationDegPerSec2 * cal.stepsPerDegreeAlt;
+  result.decelerationAlt = profile.decelerationDegPerSec2 * cal.stepsPerDegreeAlt;
+  return result;
+}
+
+double computeTravelTimeSteps(double distanceSteps,
+                              double maxSpeed,
+                              double accel,
+                              double decel) {
+  double distance = fabs(distanceSteps);
+  if (distance < 1.0) {
+    return 0.0;
+  }
+  maxSpeed = std::max(maxSpeed, 1.0);
+  accel = std::max(accel, 1.0);
+  decel = std::max(decel, 1.0);
+  double distAccel = (maxSpeed * maxSpeed) / (2.0 * accel);
+  double distDecel = (maxSpeed * maxSpeed) / (2.0 * decel);
+  if (distance >= distAccel + distDecel) {
+    double cruise = distance - distAccel - distDecel;
+    return maxSpeed / accel + maxSpeed / decel + cruise / maxSpeed;
+  }
+  double peakSpeed = sqrt((2.0 * distance * accel * decel) / (accel + decel));
+  return peakSpeed / accel + peakSpeed / decel;
 }
 
 void drawStatus() {
-  char raBuffer[24];
-  char decBuffer[24];
-  double raHours = motion::stepsToRaHours(motion::getStepCount(Axis::RA));
-  double decDeg = motion::stepsToDecDegrees(motion::getStepCount(Axis::DEC));
-  formatRa(raHours, raBuffer, sizeof(raBuffer));
-  formatDec(decDeg, decBuffer, sizeof(decBuffer));
+  double azDeg = motion::stepsToAzDegrees(motion::getStepCount(Axis::Az));
+  double altDeg = motion::stepsToAltDegrees(motion::getStepCount(Axis::Alt));
+  char azBuffer[24];
+  char altBuffer[24];
+  snprintf(azBuffer, sizeof(azBuffer), "%06.2f%c", azDeg, 0xB0);
+  formatDec(altDeg, altBuffer, sizeof(altBuffer));
 
   display.setCursor(0, 10);
-  display.print("RA: ");
-  display.print(raBuffer);
+  display.print("Az: ");
+  display.print(azBuffer);
   display.setCursor(0, 18);
-  display.print("Dec: ");
-  display.print(decBuffer);
+  display.print("Alt: ");
+  display.print(altBuffer);
 
   display.setCursor(0, 26);
   display.print("Align: ");
@@ -194,6 +382,10 @@ void drawStatus() {
   if (systemState.gotoActive) {
     display.setCursor(0, 42);
     display.print("Goto: ");
+    display.print(gotoTargetName);
+  } else if (tracking.active) {
+    display.setCursor(0, 42);
+    display.print("Track: ");
     display.print(gotoTargetName);
   }
 }
@@ -282,12 +474,17 @@ void drawCatalog() {
     display.print("Invalid entry");
     return;
   }
+  DateTime now = currentDateTime();
+  double ra;
   double dec;
-  double ra = getObjectCoordinates(*object, dec);
+  getObjectRaDecAt(*object, now, 0.0, ra, dec, nullptr);
   char raBuffer[24];
   char decBuffer[24];
   formatRa(ra, raBuffer, sizeof(raBuffer));
   formatDec(dec, decBuffer, sizeof(decBuffer));
+  double azDeg = 0.0;
+  double altDeg = -90.0;
+  bool above = raDecToAltAz(now, ra, dec, azDeg, altDeg);
   display.setCursor(0, 20);
   display.print(object->name);
   display.setCursor(0, 28);
@@ -299,23 +496,149 @@ void drawCatalog() {
   display.print("Dec: ");
   display.print(decBuffer);
   display.setCursor(0, 52);
-  display.print("Mag: ");
-  display.print(object->magnitude, 1);
+  display.printf("Alt: %+.1f%c Joy=Exit", altDeg, 0xB0);
   display.setCursor(0, 60);
-  display.print("Enc sel, joy=exit");
+  display.printf("Mag: %.1f %s", object->magnitude, above ? "" : "(below)");
+  display.setCursor(78, 60);
+  display.print("Enc=Go");
 }
 
 void drawAxisCalibration() {
   display.setCursor(0, 12);
   display.print("Axis Cal");
   const char* steps[] = {
-      "Set RA 0h, enc",
-      "Rotate +1h, enc",
-      "Set Dec 0deg, enc",
-      "Rotate +10deg, enc"};
+      "Set Az 0deg, enc",
+      "Rotate +90deg, enc",
+      "Set Alt 0deg, enc",
+      "Rotate +45deg, enc"};
   int index = std::min(axisCal.step, 3);
   display.setCursor(0, 24);
   display.print(steps[index]);
+}
+
+void drawGotoSpeedSetup() {
+  display.setCursor(0, 12);
+  display.print("Goto Speed");
+  const char* labels[] = {"Max [deg/s]", "Accel [deg/s2]", "Decel [deg/s2]"};
+  float values[] = {gotoSpeedState.maxSpeed, gotoSpeedState.acceleration, gotoSpeedState.deceleration};
+  int y = 24;
+  for (int i = 0; i < 3; ++i) {
+    bool selected = gotoSpeedState.fieldIndex == i;
+    if (selected) {
+      display.fillRect(0, y, config::OLED_WIDTH, 8, SSD1306_WHITE);
+      display.setTextColor(SSD1306_BLACK);
+    } else {
+      display.setTextColor(SSD1306_WHITE);
+    }
+    display.setCursor(0, y);
+    display.printf("%s: %4.1f", labels[i], values[i]);
+    if (selected) {
+      display.setTextColor(SSD1306_WHITE);
+    }
+    y += 8;
+  }
+  display.setCursor(0, 60);
+  display.print("Joy=Next Enc=Save");
+}
+
+void drawBacklashCalibration() {
+  display.setCursor(0, 12);
+  display.print("Backlash Cal");
+  const char* prompts[] = {"Az fwd pos, enc", "Az reverse, enc", "Alt fwd pos, enc", "Alt reverse, enc", "Done"};
+  int idx = std::min(backlashState.step, 4);
+  display.setCursor(0, 24);
+  display.print(prompts[idx]);
+  display.setCursor(0, 40);
+  display.print("Use joy to move");
+  display.setCursor(0, 56);
+  display.print("Joy btn = abort");
+}
+
+void enterGotoSpeedSetup() {
+  const GotoProfile& profile = storage::getConfig().gotoProfile;
+  gotoSpeedState.maxSpeed = profile.maxSpeedDegPerSec;
+  gotoSpeedState.acceleration = profile.accelerationDegPerSec2;
+  gotoSpeedState.deceleration = profile.decelerationDegPerSec2;
+  gotoSpeedState.fieldIndex = 0;
+  setUiState(UiState::GotoSpeed);
+}
+
+void handleGotoSpeedInput(int delta) {
+  if (delta != 0) {
+    constexpr float step = 0.1f;
+    switch (gotoSpeedState.fieldIndex) {
+      case 0:
+        gotoSpeedState.maxSpeed = std::clamp(gotoSpeedState.maxSpeed + delta * step, 0.5f, 20.0f);
+        break;
+      case 1:
+        gotoSpeedState.acceleration = std::clamp(gotoSpeedState.acceleration + delta * step, 0.1f, 20.0f);
+        break;
+      case 2:
+        gotoSpeedState.deceleration = std::clamp(gotoSpeedState.deceleration + delta * step, 0.1f, 20.0f);
+        break;
+    }
+  }
+  if (input::consumeJoystickPress()) {
+    gotoSpeedState.fieldIndex = (gotoSpeedState.fieldIndex + 1) % 3;
+  }
+  if (input::consumeEncoderClick()) {
+    GotoProfile profile{gotoSpeedState.maxSpeed, gotoSpeedState.acceleration, gotoSpeedState.deceleration};
+    storage::setGotoProfile(profile);
+    showInfo("Goto saved");
+    setUiState(UiState::SetupMenu);
+  }
+}
+
+void startBacklashCalibration() {
+  backlashState = {0, 0, 0, 0, 0};
+  setUiState(UiState::BacklashCalibration);
+  showInfo("Az fwd pos");
+}
+
+void completeBacklashCalibration() {
+  int32_t azSteps = static_cast<int32_t>(std::min<int64_t>(llabs(backlashState.azEnd - backlashState.azStart), INT32_MAX));
+  int32_t altSteps = static_cast<int32_t>(std::min<int64_t>(llabs(backlashState.altEnd - backlashState.altStart), INT32_MAX));
+  BacklashConfig config{azSteps, altSteps};
+  storage::setBacklash(config);
+  motion::setBacklash(config);
+  showInfo("Backlash saved");
+  setUiState(UiState::SetupMenu);
+}
+
+void handleBacklashCalibrationInput() {
+  if (input::consumeJoystickPress()) {
+    setUiState(UiState::SetupMenu);
+    showInfo("Cal aborted");
+    return;
+  }
+  if (!input::consumeEncoderClick()) {
+    return;
+  }
+  switch (backlashState.step) {
+    case 0:
+      backlashState.azStart = motion::getStepCount(Axis::Az);
+      backlashState.step = 1;
+      showInfo("Reverse AZ");
+      break;
+    case 1:
+      backlashState.azEnd = motion::getStepCount(Axis::Az);
+      backlashState.step = 2;
+      showInfo("Set Alt pos");
+      break;
+    case 2:
+      backlashState.altStart = motion::getStepCount(Axis::Alt);
+      backlashState.step = 3;
+      showInfo("Reverse ALT");
+      break;
+    case 3:
+      backlashState.altEnd = motion::getStepCount(Axis::Alt);
+      backlashState.step = 4;
+      completeBacklashCalibration();
+      break;
+    default:
+      setUiState(UiState::SetupMenu);
+      break;
+  }
 }
 
 void render() {
@@ -355,6 +678,12 @@ void render() {
       break;
     case UiState::AxisCalibration:
       drawAxisCalibration();
+      break;
+    case UiState::GotoSpeed:
+      drawGotoSpeedSetup();
+      break;
+    case UiState::BacklashCalibration:
+      drawBacklashCalibration();
       break;
   }
 
@@ -412,18 +741,20 @@ void resetAxisCalibrationState() {
 }
 
 void completeAxisCalibration() {
-  double stepsPerHour = fabs(static_cast<double>(axisCal.raOneHour - axisCal.raZero));
-  double stepsPerDegree = fabs(static_cast<double>(axisCal.decSpan - axisCal.decZero)) / 10.0;
-  if (stepsPerHour < 1.0 || stepsPerDegree < 1.0) {
+  double azSpan = fabs(static_cast<double>(axisCal.azReference - axisCal.azZero));
+  double altSpan = fabs(static_cast<double>(axisCal.altReference - axisCal.altZero));
+  double stepsPerAzDegree = azSpan / 90.0;
+  double stepsPerAltDegree = altSpan / 45.0;
+  if (stepsPerAzDegree < 1.0 || stepsPerAltDegree < 1.0) {
     showInfo("Cal failed");
     resetAxisCalibrationState();
     return;
   }
   AxisCalibration calibration;
-  calibration.stepsPerHourRA = stepsPerHour;
-  calibration.stepsPerDegreeDEC = stepsPerDegree;
-  calibration.raHomeOffset = axisCal.raZero;
-  calibration.decHomeOffset = axisCal.decZero;
+  calibration.stepsPerDegreeAz = stepsPerAzDegree;
+  calibration.stepsPerDegreeAlt = stepsPerAltDegree;
+  calibration.azHomeOffset = axisCal.azZero;
+  calibration.altHomeOffset = axisCal.altZero;
   storage::setAxisCalibration(calibration);
   motion::applyCalibration(calibration);
   showInfo("Axes calibrated");
@@ -433,28 +764,320 @@ void completeAxisCalibration() {
 void handleAxisCalibrationClick() {
   switch (axisCal.step) {
     case 0:
-      axisCal.raZero = motion::getStepCount(Axis::RA);
+      axisCal.azZero = motion::getStepCount(Axis::Az);
       axisCal.step = 1;
-      showInfo("Rotate +1h");
+      showInfo("Rotate +90deg");
       break;
     case 1:
-      axisCal.raOneHour = motion::getStepCount(Axis::RA);
+      axisCal.azReference = motion::getStepCount(Axis::Az);
       axisCal.step = 2;
-      showInfo("Set Dec 0");
+      showInfo("Set Alt 0");
       break;
     case 2:
-      axisCal.decZero = motion::getStepCount(Axis::DEC);
+      axisCal.altZero = motion::getStepCount(Axis::Alt);
       axisCal.step = 3;
-      showInfo("Rotate +10deg");
+      showInfo("Rotate +45deg");
       break;
     case 3:
-      axisCal.decSpan = motion::getStepCount(Axis::DEC);
+      axisCal.altReference = motion::getStepCount(Axis::Alt);
       axisCal.step = 4;
       completeAxisCalibration();
       break;
     default:
       break;
   }
+}
+
+AxisGotoRuntime initAxisRuntime(Axis axis, int64_t targetSteps) {
+  AxisGotoRuntime runtime{};
+  runtime.finalTarget = targetSteps;
+  runtime.compensatedTarget = targetSteps;
+  runtime.currentSpeed = 0.0;
+  runtime.desiredDirection = 0;
+  runtime.compensationPending = false;
+  runtime.reachedFinalTarget = false;
+
+  int64_t current = motion::getStepCount(axis);
+  int64_t diff = targetSteps - current;
+  if (diff == 0) {
+    runtime.reachedFinalTarget = true;
+    return runtime;
+  }
+
+  runtime.desiredDirection = diff >= 0 ? 1 : -1;
+  int8_t lastDir = motion::getLastDirection(axis);
+  int32_t backlash = motion::getBacklashSteps(axis);
+  if (backlash > 0 && lastDir != 0 && lastDir != runtime.desiredDirection) {
+    runtime.compensatedTarget = targetSteps + runtime.desiredDirection * backlash;
+    runtime.compensationPending = true;
+  }
+  return runtime;
+}
+
+bool updateAxisGoto(Axis axis,
+                    AxisGotoRuntime& runtime,
+                    double dt,
+                    const GotoProfileSteps& profile) {
+  if (runtime.reachedFinalTarget) {
+    motion::setGotoStepsPerSecond(axis, 0.0);
+    return true;
+  }
+
+  int64_t current = motion::getStepCount(axis);
+  int64_t error = runtime.compensatedTarget - current;
+  double absError = fabs(static_cast<double>(error));
+  double direction = (error >= 0) ? 1.0 : -1.0;
+
+  double maxSpeed = std::max(axis == Axis::Az ? profile.maxSpeedAz : profile.maxSpeedAlt, 1.0);
+  double accel = std::max(axis == Axis::Az ? profile.accelerationAz : profile.accelerationAlt, 1.0);
+  double decel = std::max(axis == Axis::Az ? profile.decelerationAz : profile.decelerationAlt, 1.0);
+
+  double speed = runtime.currentSpeed;
+  double distanceToStop = (speed * speed) / (2.0 * decel);
+
+  if (absError <= 1.0 && speed < 1.0) {
+    motion::setGotoStepsPerSecond(axis, 0.0);
+    if (runtime.compensationPending) {
+      runtime.compensationPending = false;
+      runtime.compensatedTarget = runtime.finalTarget;
+      runtime.currentSpeed = 0.0;
+      return false;
+    }
+    runtime.reachedFinalTarget = true;
+    return true;
+  }
+
+  if (absError <= distanceToStop + 1.0) {
+    speed -= decel * dt;
+    if (speed < 0.0) speed = 0.0;
+  } else {
+    speed += accel * dt;
+    if (speed > maxSpeed) speed = maxSpeed;
+  }
+
+  if (speed < 1.0 && absError > 2.0) {
+    speed = std::min(maxSpeed, speed + accel * dt);
+  }
+
+  double commanded = speed * direction;
+  motion::setGotoStepsPerSecond(axis, commanded);
+  runtime.currentSpeed = speed;
+  return false;
+}
+
+bool computeTargetAltAz(const CatalogObject& object,
+                        const DateTime& start,
+                        double secondsAhead,
+                        double& raHours,
+                        double& decDegrees,
+                        double& azDeg,
+                        double& altDeg,
+                        DateTime& targetTime) {
+  getObjectRaDecAt(object, start, secondsAhead, raHours, decDegrees, &targetTime);
+  return raDecToAltAz(targetTime, raHours, decDegrees, azDeg, altDeg);
+}
+
+void finalizeTrackingTarget(int catalogIndex,
+                            double raHours,
+                            double decDegrees,
+                            double azDeg,
+                            double altDeg) {
+  tracking.active = true;
+  tracking.targetCatalogIndex = catalogIndex;
+  tracking.targetRaHours = raHours;
+  tracking.targetDecDegrees = decDegrees;
+  tracking.offsetAzDeg = wrapAngle180(motion::stepsToAzDegrees(motion::getStepCount(Axis::Az)) - azDeg);
+  tracking.offsetAltDeg = motion::stepsToAltDegrees(motion::getStepCount(Axis::Alt)) - altDeg;
+  tracking.userAdjusting = false;
+  systemState.trackingActive = true;
+  motion::setTrackingEnabled(true);
+}
+
+void completeGotoSuccess() {
+  motion::clearGotoRates();
+  systemState.gotoActive = false;
+  gotoRuntime.active = false;
+  showInfo("Goto done");
+
+  double azDeg = 0.0;
+  double altDeg = 0.0;
+  DateTime now = currentDateTime();
+  double ra = gotoRuntime.targetRaHours;
+  double dec = gotoRuntime.targetDecDegrees;
+  raDecToAltAz(now, ra, dec, azDeg, altDeg);
+  finalizeTrackingTarget(gotoRuntime.targetCatalogIndex, ra, dec, azDeg, altDeg);
+}
+
+void abortGoto() {
+  motion::clearGotoRates();
+  gotoRuntime.active = false;
+  systemState.gotoActive = false;
+  stopTracking();
+}
+
+void updateTracking() {
+  if (gotoRuntime.active || systemState.gotoActive) {
+    motion::setTrackingRates(0.0, 0.0);
+    motion::setTrackingEnabled(false);
+    return;
+  }
+
+  if (!tracking.active) {
+    motion::setTrackingRates(0.0, 0.0);
+    motion::setTrackingEnabled(false);
+    systemState.trackingActive = false;
+    return;
+  }
+
+  DateTime now = currentDateTime();
+  double ra = tracking.targetRaHours;
+  double dec = tracking.targetDecDegrees;
+  if (tracking.targetCatalogIndex >= 0 &&
+      tracking.targetCatalogIndex < static_cast<int>(catalog::size())) {
+    const CatalogObject* object = catalog::get(static_cast<size_t>(tracking.targetCatalogIndex));
+    if (object) {
+      getObjectRaDecAt(*object, now, 0.0, ra, dec, nullptr);
+    }
+  }
+
+  double azDeg = 0.0;
+  double altDeg = 0.0;
+  if (!raDecToAltAz(now, ra, dec, azDeg, altDeg)) {
+    motion::setTrackingRates(0.0, 0.0);
+    systemState.trackingActive = false;
+    return;
+  }
+
+  double desiredAz = wrapAngle360(azDeg + tracking.offsetAzDeg);
+  double desiredAlt = altDeg + tracking.offsetAltDeg;
+  double currentAz = motion::stepsToAzDegrees(motion::getStepCount(Axis::Az));
+  double currentAlt = motion::stepsToAltDegrees(motion::getStepCount(Axis::Alt));
+
+  if (systemState.joystickActive) {
+    tracking.userAdjusting = true;
+    motion::setTrackingRates(0.0, 0.0);
+    motion::setTrackingEnabled(false);
+    systemState.trackingActive = false;
+    return;
+  }
+
+  if (tracking.userAdjusting) {
+    tracking.userAdjusting = false;
+    tracking.offsetAzDeg = wrapAngle180(currentAz - azDeg);
+    tracking.offsetAltDeg = currentAlt - altDeg;
+    desiredAz = wrapAngle360(azDeg + tracking.offsetAzDeg);
+    desiredAlt = altDeg + tracking.offsetAltDeg;
+  }
+
+  double errorAz = shortestAngularDistance(currentAz, desiredAz);
+  double errorAlt = desiredAlt - currentAlt;
+  constexpr double kTrackingGain = 0.4;
+  constexpr double kMaxTrackingSpeed = 3.0;
+  double azRate = std::clamp(errorAz * kTrackingGain, -kMaxTrackingSpeed, kMaxTrackingSpeed);
+  double altRate = std::clamp(errorAlt * kTrackingGain, -kMaxTrackingSpeed, kMaxTrackingSpeed);
+
+  motion::setTrackingRates(azRate, altRate);
+  motion::setTrackingEnabled(true);
+  systemState.trackingActive = true;
+}
+
+void updateGoto() {
+  if (!gotoRuntime.active) {
+    if (systemState.gotoActive) {
+      abortGoto();
+    }
+    updateTracking();
+    return;
+  }
+
+  if (!systemState.gotoActive) {
+    abortGoto();
+    updateTracking();
+    return;
+  }
+
+  uint32_t nowMs = millis();
+  double dt = (nowMs - gotoRuntime.lastUpdateMs) / 1000.0;
+  gotoRuntime.lastUpdateMs = nowMs;
+  if (dt <= 0.0) {
+    return;
+  }
+
+  bool azDone = updateAxisGoto(Axis::Az, gotoRuntime.az, dt, gotoRuntime.profile);
+  bool altDone = updateAxisGoto(Axis::Alt, gotoRuntime.alt, dt, gotoRuntime.profile);
+
+  if (azDone && altDone) {
+    completeGotoSuccess();
+  }
+}
+
+bool startGotoToObject(const CatalogObject& object, int catalogIndex) {
+  const AxisCalibration& cal = storage::getConfig().axisCalibration;
+  if (cal.stepsPerDegreeAz <= 0.0 || cal.stepsPerDegreeAlt <= 0.0) {
+    showInfo("Calibrate axes");
+    return false;
+  }
+
+  if (gotoRuntime.active) {
+    abortGoto();
+  }
+
+  DateTime now = currentDateTime();
+  double currentAz = motion::stepsToAzDegrees(motion::getStepCount(Axis::Az));
+  double currentAlt = motion::stepsToAltDegrees(motion::getStepCount(Axis::Alt));
+
+  double raNow;
+  double decNow;
+  double azNow;
+  double altNow;
+  DateTime timeNow;
+  if (!computeTargetAltAz(object, now, 0.0, raNow, decNow, azNow, altNow, timeNow) || altNow < 0.0) {
+    showInfo("Below horizon");
+    return false;
+  }
+
+  GotoProfileSteps profile = toProfileSteps(storage::getConfig().gotoProfile, cal);
+  double azDiffNow = shortestAngularDistance(currentAz, azNow) * cal.stepsPerDegreeAz;
+  double altDiffNow = (altNow - currentAlt) * cal.stepsPerDegreeAlt;
+  double durationAz = computeTravelTimeSteps(azDiffNow, profile.maxSpeedAz, profile.accelerationAz, profile.decelerationAz);
+  double durationAlt = computeTravelTimeSteps(altDiffNow, profile.maxSpeedAlt, profile.accelerationAlt, profile.decelerationAlt);
+  double estimatedDuration = std::max(durationAz, durationAlt) + 1.0;
+
+  double raFuture;
+  double decFuture;
+  double azFuture;
+  double altFuture;
+  DateTime arrivalTime;
+  if (!computeTargetAltAz(object, now, estimatedDuration, raFuture, decFuture, azFuture, altFuture, arrivalTime) ||
+      altFuture < 0.0) {
+    showInfo("Below horizon");
+    return false;
+  }
+
+  int64_t currentAzSteps = motion::getStepCount(Axis::Az);
+  int64_t currentAltSteps = motion::getStepCount(Axis::Alt);
+  int64_t targetAzSteps = currentAzSteps + static_cast<int64_t>(llround(shortestAngularDistance(currentAz, azFuture) * cal.stepsPerDegreeAz));
+  int64_t targetAltSteps = currentAltSteps + static_cast<int64_t>(llround((altFuture - currentAlt) * cal.stepsPerDegreeAlt));
+
+  gotoRuntime.active = true;
+  gotoRuntime.az = initAxisRuntime(Axis::Az, targetAzSteps);
+  gotoRuntime.alt = initAxisRuntime(Axis::Alt, targetAltSteps);
+  gotoRuntime.profile = profile;
+  gotoRuntime.estimatedDurationSec = estimatedDuration;
+  gotoRuntime.lastUpdateMs = millis();
+  gotoRuntime.startTime = now;
+  gotoRuntime.targetRaHours = raFuture;
+  gotoRuntime.targetDecDegrees = decFuture;
+  gotoRuntime.targetCatalogIndex = catalogIndex;
+
+  systemState.gotoActive = true;
+  systemState.azGotoTarget = targetAzSteps;
+  systemState.altGotoTarget = targetAltSteps;
+  gotoTargetName = object.name;
+  motion::clearGotoRates();
+  stopTracking();
+  showInfo("Goto started");
+  return true;
 }
 
 void startGotoToSelected() {
@@ -468,52 +1091,18 @@ void startGotoToSelected() {
     showInfo("Invalid object");
     return;
   }
-  double dec;
-  double ra = getObjectCoordinates(*object, dec);
-  systemState.raGotoTarget = motion::raHoursToSteps(ra);
-  systemState.decGotoTarget = motion::decDegreesToSteps(dec);
-  systemState.gotoActive = true;
-  gotoTargetName = object->name;
-  motion::setTrackingEnabled(false);
-  systemState.trackingActive = false;
-  showInfo("Goto started");
+  if (startGotoToObject(*object, systemState.selectedCatalogIndex)) {
+    selectedObjectName = object->name;
+    gotoTargetName = object->name;
+  }
 }
 
-void updateGoto() {
-  if (!systemState.gotoActive) {
-    return;
-  }
-  constexpr double maxRpm = config::MAX_RPM_MANUAL * 0.8f;
-  bool raDone = false;
-  bool decDone = false;
-
-  int64_t currentRa = motion::getStepCount(Axis::RA);
-  int64_t currentDec = motion::getStepCount(Axis::DEC);
-  int64_t diffRa = systemState.raGotoTarget - currentRa;
-  int64_t diffDec = systemState.decGotoTarget - currentDec;
-
-  if (llabs(diffRa) < 10) {
-    motion::setManualRate(Axis::RA, 0.0f);
-    raDone = true;
-  } else {
-    float rpm = diffRa > 0 ? maxRpm : -maxRpm;
-    motion::setManualRate(Axis::RA, rpm);
-  }
-
-  if (llabs(diffDec) < 10) {
-    motion::setManualRate(Axis::DEC, 0.0f);
-    decDone = true;
-  } else {
-    float rpm = diffDec > 0 ? maxRpm : -maxRpm;
-    motion::setManualRate(Axis::DEC, rpm);
-  }
-
-  if (raDone && decDone) {
-    systemState.gotoActive = false;
-    motion::setManualRate(Axis::RA, 0.0f);
-    motion::setManualRate(Axis::DEC, 0.0f);
-    showInfo("Goto done");
-  }
+void stopTracking() {
+  tracking.active = false;
+  tracking.userAdjusting = false;
+  systemState.trackingActive = false;
+  motion::setTrackingEnabled(false);
+  motion::setTrackingRates(0.0, 0.0);
 }
 
 void handleMainMenuInput(int delta) {
@@ -536,14 +1125,18 @@ void handleMainMenuInput(int delta) {
       if (!systemState.polarAligned) {
         showInfo("Align first");
       } else {
-        motion::setTrackingEnabled(true);
+        if (!tracking.active && selectedObjectName.isEmpty() && tracking.targetCatalogIndex < 0) {
+          showInfo("Goto first");
+          break;
+        }
+        tracking.active = true;
+        tracking.userAdjusting = false;
         systemState.trackingActive = true;
         showInfo("Tracking on");
       }
       break;
     case 3:
-      motion::setTrackingEnabled(false);
-      systemState.trackingActive = false;
+      stopTracking();
       showInfo("Tracking off");
       break;
     case 4:
@@ -587,9 +1180,15 @@ void handleSetupMenuInput(int delta) {
       break;
     case 2:
       resetAxisCalibrationState();
-      showInfo("Set RA 0h");
+      showInfo("Set Az 0");
       break;
     case 3:
+      enterGotoSpeedSetup();
+      break;
+    case 4:
+      startBacklashCalibration();
+      break;
+    case 5:
       setUiState(UiState::MainMenu);
       break;
     default:
@@ -649,8 +1248,10 @@ void handleCatalogInput(int delta) {
     systemState.selectedCatalogIndex = catalogIndex;
     const CatalogObject* object = catalog::get(static_cast<size_t>(catalogIndex));
     if (object) {
-      selectedObjectName = object->name;
-      showInfo("Target selected");
+      if (startGotoToObject(*object, catalogIndex)) {
+        selectedObjectName = object->name;
+        gotoTargetName = object->name;
+      }
     }
   }
   if (input::consumeJoystickPress()) {
@@ -753,6 +1354,12 @@ void handleInput() {
         setUiState(UiState::SetupMenu);
       }
       break;
+    case UiState::GotoSpeed:
+      handleGotoSpeedInput(delta);
+      break;
+    case UiState::BacklashCalibration:
+      handleBacklashCalibrationInput();
+      break;
   }
 }
 
@@ -769,9 +1376,14 @@ void completePolarAlignment() {
   systemState.polarAligned = true;
   systemState.trackingActive = false;
   systemState.gotoActive = false;
-  motion::setTrackingEnabled(false);
-  motion::setStepCount(Axis::RA, motion::raHoursToSteps(config::POLARIS_RA_HOURS));
-  motion::setStepCount(Axis::DEC, motion::decDegreesToSteps(config::POLARIS_DEC_DEGREES));
+  stopTracking();
+  double azDeg = 0.0;
+  double altDeg = 0.0;
+  DateTime now = currentDateTime();
+  if (raDecToAltAz(now, config::POLARIS_RA_HOURS, config::POLARIS_DEC_DEGREES, azDeg, altDeg)) {
+    motion::setStepCount(Axis::Az, motion::azDegreesToSteps(azDeg));
+    motion::setStepCount(Axis::Alt, motion::altDegreesToSteps(altDeg));
+  }
   storage::setPolarAligned(true);
   setUiState(UiState::MainMenu);
   showInfo("Polaris locked");
@@ -782,7 +1394,7 @@ void startPolarAlignment() {
   systemState.polarAligned = false;
   systemState.trackingActive = false;
   systemState.gotoActive = false;
-  motion::setTrackingEnabled(false);
+  stopTracking();
   setUiState(UiState::PolarAlign);
   showInfo("Use joystick", 2000);
 }

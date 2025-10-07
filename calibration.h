@@ -8,9 +8,20 @@ struct JoystickCalibration {
 };
 
 struct AxisCalibration {
-  double stepsPerHourRA;
-  double stepsPerDegreeDEC;
-  int64_t raHomeOffset;
-  int64_t decHomeOffset;
+  double stepsPerDegreeAz;
+  double stepsPerDegreeAlt;
+  int64_t azHomeOffset;
+  int64_t altHomeOffset;
+};
+
+struct BacklashConfig {
+  int32_t azSteps;
+  int32_t altSteps;
+};
+
+struct GotoProfile {
+  float maxSpeedDegPerSec;
+  float accelerationDegPerSec2;
+  float decelerationDegPerSec2;
 };
 

@@ -1,3 +1,5 @@
+#include <math.h>
+
 #include "config.h"
 #include "catalog.h"
 #include "display_menu.h"
@@ -32,6 +34,7 @@ void setup() {
 
   motion::init();
   motion::applyCalibration(storage::getConfig().axisCalibration);
+  motion::setBacklash(storage::getConfig().backlash);
   display_menu::showReady();
   display_menu::startTask();
 
@@ -49,24 +52,24 @@ void loop() {
   display_menu::update();
   display_menu::handleInput();
 
-  if (!systemState.gotoActive) {
-    float raInput = input::getJoystickNormalizedX();
-    float decInput = input::getJoystickNormalizedY();
-    motion::setManualRate(Axis::RA, raInput * config::MAX_RPM_MANUAL);
-    motion::setManualRate(Axis::DEC, decInput * config::MAX_RPM_MANUAL);
-  } else {
+  float azInput = input::getJoystickNormalizedX();
+  float altInput = input::getJoystickNormalizedY();
+  systemState.joystickActive = (fabs(azInput) > config::JOYSTICK_DEADZONE ||
+                                fabs(altInput) > config::JOYSTICK_DEADZONE);
+  motion::setManualRate(Axis::Az, azInput * config::MAX_RPM_MANUAL);
+  motion::setManualRate(Axis::Alt, altInput * config::MAX_RPM_MANUAL);
+
+  if (systemState.gotoActive) {
     if (input::consumeJoystickPress()) {
       systemState.gotoActive = false;
-      motion::setManualRate(Axis::RA, 0.0f);
-      motion::setManualRate(Axis::DEC, 0.0f);
+      motion::clearGotoRates();
       display_menu::showInfo("Goto aborted", 2000);
     }
   }
 
   if (input::consumeJoystickPress() && !systemState.gotoActive) {
     motion::stopAll();
-    motion::setTrackingEnabled(false);
-    systemState.trackingActive = false;
+    display_menu::stopTracking();
     display_menu::showInfo("Motion stopped", 2000);
   }
 
