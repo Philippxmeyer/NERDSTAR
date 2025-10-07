@@ -4,6 +4,23 @@
 
 #include <TMCStepper.h>
 
+#if defined(ARDUINO_ARCH_ESP32)
+#include <esp32-hal.h>
+#include <esp32-hal-timer.h>
+#endif
+
+#ifndef ESP_ARDUINO_VERSION_VAL
+#define ESP_ARDUINO_VERSION_VAL(major, minor, patch) \
+  ((major << 16) | (minor << 8) | (patch))
+#endif
+
+#if defined(ESP_ARDUINO_VERSION) && \
+    (ESP_ARDUINO_VERSION >= ESP_ARDUINO_VERSION_VAL(3, 0, 0))
+#define MOTION_HAS_NEW_TIMER_API 1
+#else
+#define MOTION_HAS_NEW_TIMER_API 0
+#endif
+
 #include "calibration.h"
 
 namespace {
@@ -86,17 +103,31 @@ AxisState& getAxisState(Axis axis) {
 }
 
 void configureTimer(AxisState& axis, uint8_t timerIndex, void (*isr)()) {
+#if MOTION_HAS_NEW_TIMER_API
+  (void)timerIndex;
+  constexpr uint32_t kTimerBaseHz = 1000000;  // 1 MHz tick frequency
+  axis.timer = timerBegin(kTimerBaseHz);
+  timerAttachInterrupt(axis.timer, isr);
+  timerSetAutoReload(axis.timer, true);
+  timerSetOverflow(axis.timer, 1000);
+  timerStop(axis.timer);
+#else
   axis.timer = timerBegin(timerIndex, 80, true);  // 80MHz / 80 = 1 MHz base
   timerAttachInterrupt(axis.timer, isr, true);
   timerAlarmWrite(axis.timer, 1000, true);
   timerAlarmDisable(axis.timer);
+#endif
 }
 
 void applyAxisCommand(AxisState& axis) {
   double trackingContribution = trackingEnabled ? axis.trackingStepsPerSecond : 0.0;
   double totalSteps = axis.userStepsPerSecond + axis.gotoStepsPerSecond + trackingContribution;
   if (fabs(totalSteps) < 0.1) {
+#if MOTION_HAS_NEW_TIMER_API
+    timerStop(axis.timer);
+#else
     timerAlarmDisable(axis.timer);
+#endif
     portENTER_CRITICAL(&axis.mux);
     axis.stepState = false;
     portEXIT_CRITICAL(&axis.mux);
@@ -113,8 +144,14 @@ void applyAxisCommand(AxisState& axis) {
   if (periodUs < 50.0) {
     periodUs = 50.0;  // limit to avoid overwhelming timer
   }
+#if MOTION_HAS_NEW_TIMER_API
+  timerSetOverflow(axis.timer, static_cast<uint64_t>(periodUs));
+  timerWrite(axis.timer, 0);
+  timerStart(axis.timer);
+#else
   timerAlarmWrite(axis.timer, static_cast<uint64_t>(periodUs), true);
   timerAlarmEnable(axis.timer);
+#endif
 }
 
 }  // namespace
@@ -190,8 +227,13 @@ void stopAll() {
   axisAz.trackingStepsPerSecond = 0.0;
   axisAlt.trackingStepsPerSecond = 0.0;
   trackingEnabled = false;
+#if MOTION_HAS_NEW_TIMER_API
+  timerStop(axisAz.timer);
+  timerStop(axisAlt.timer);
+#else
   timerAlarmDisable(axisAz.timer);
   timerAlarmDisable(axisAlt.timer);
+#endif
   digitalWrite(axisAz.stepPin, LOW);
   digitalWrite(axisAlt.stepPin, LOW);
 }

@@ -11,7 +11,7 @@ namespace {
 constexpr uint32_t kConfigMagic = 0x4E455244;  // "NERD"
 constexpr size_t kEepromSize = 256;
 
-SystemConfig config{
+SystemConfig systemConfig{
     kConfigMagic,
     {2048, 2048},
     {0.0, 0.0, 0, 0},
@@ -27,24 +27,24 @@ bool sdAvailable = false;
 void applyDefaults() {
   constexpr double stepsPerMotorRev = config::FULLSTEPS_PER_REV * config::MICROSTEPS;
   constexpr double stepsPerAxisRev = stepsPerMotorRev * config::GEAR_RATIO;
-  config.magic = kConfigMagic;
-  config.joystickCalibration = {2048, 2048};
-  config.axisCalibration.stepsPerDegreeAz = stepsPerAxisRev / 360.0;
-  config.axisCalibration.stepsPerDegreeAlt = stepsPerAxisRev / 360.0;
-  config.axisCalibration.azHomeOffset = 0;
-  config.axisCalibration.altHomeOffset = 0;
-  config.backlash = {0, 0};
-  config.gotoProfile.maxSpeedDegPerSec = 3.0f;
-  config.gotoProfile.accelerationDegPerSec2 = 1.0f;
-  config.gotoProfile.decelerationDegPerSec2 = 1.0f;
-  config.joystickCalibrated = false;
-  config.axisCalibrated = false;
-  config.polarAligned = false;
-  config.lastRtcEpoch = 0;
+  systemConfig.magic = kConfigMagic;
+  systemConfig.joystickCalibration = {2048, 2048};
+  systemConfig.axisCalibration.stepsPerDegreeAz = stepsPerAxisRev / 360.0;
+  systemConfig.axisCalibration.stepsPerDegreeAlt = stepsPerAxisRev / 360.0;
+  systemConfig.axisCalibration.azHomeOffset = 0;
+  systemConfig.axisCalibration.altHomeOffset = 0;
+  systemConfig.backlash = {0, 0};
+  systemConfig.gotoProfile.maxSpeedDegPerSec = 3.0f;
+  systemConfig.gotoProfile.accelerationDegPerSec2 = 1.0f;
+  systemConfig.gotoProfile.decelerationDegPerSec2 = 1.0f;
+  systemConfig.joystickCalibrated = false;
+  systemConfig.axisCalibrated = false;
+  systemConfig.polarAligned = false;
+  systemConfig.lastRtcEpoch = 0;
 }
 
 void saveConfig() {
-  EEPROM.put(0, config);
+  EEPROM.put(0, systemConfig);
   EEPROM.commit();
 }
 
@@ -54,57 +54,58 @@ namespace storage {
 
 bool init() {
   EEPROM.begin(kEepromSize);
-  EEPROM.get(0, config);
-  if (config.magic != kConfigMagic || config.axisCalibration.stepsPerDegreeAz <= 0.0 ||
-      config.axisCalibration.stepsPerDegreeAlt <= 0.0) {
+  EEPROM.get(0, systemConfig);
+  if (systemConfig.magic != kConfigMagic || systemConfig.axisCalibration.stepsPerDegreeAz <= 0.0 ||
+      systemConfig.axisCalibration.stepsPerDegreeAlt <= 0.0) {
     applyDefaults();
     saveConfig();
   } else {
-    if (config.gotoProfile.maxSpeedDegPerSec <= 0.0f || config.gotoProfile.accelerationDegPerSec2 <= 0.0f ||
-        config.gotoProfile.decelerationDegPerSec2 <= 0.0f) {
-      config.gotoProfile.maxSpeedDegPerSec = 3.0f;
-      config.gotoProfile.accelerationDegPerSec2 = 1.0f;
-      config.gotoProfile.decelerationDegPerSec2 = 1.0f;
+    if (systemConfig.gotoProfile.maxSpeedDegPerSec <= 0.0f ||
+        systemConfig.gotoProfile.accelerationDegPerSec2 <= 0.0f ||
+        systemConfig.gotoProfile.decelerationDegPerSec2 <= 0.0f) {
+      systemConfig.gotoProfile.maxSpeedDegPerSec = 3.0f;
+      systemConfig.gotoProfile.accelerationDegPerSec2 = 1.0f;
+      systemConfig.gotoProfile.decelerationDegPerSec2 = 1.0f;
     }
-    if (config.backlash.azSteps < 0) config.backlash.azSteps = 0;
-    if (config.backlash.altSteps < 0) config.backlash.altSteps = 0;
+    if (systemConfig.backlash.azSteps < 0) systemConfig.backlash.azSteps = 0;
+    if (systemConfig.backlash.altSteps < 0) systemConfig.backlash.altSteps = 0;
   }
 
   sdAvailable = SD.begin(config::SD_CS_PIN);
   return sdAvailable;
 }
 
-const SystemConfig& getConfig() { return config; }
+const SystemConfig& getConfig() { return systemConfig; }
 
 void setJoystickCalibration(const JoystickCalibration& calibration) {
-  config.joystickCalibration = calibration;
-  config.joystickCalibrated = true;
+  systemConfig.joystickCalibration = calibration;
+  systemConfig.joystickCalibrated = true;
   saveConfig();
 }
 
 void setAxisCalibration(const AxisCalibration& calibration) {
-  config.axisCalibration = calibration;
-  config.axisCalibrated = true;
+  systemConfig.axisCalibration = calibration;
+  systemConfig.axisCalibrated = true;
   saveConfig();
 }
 
 void setBacklash(const BacklashConfig& backlash) {
-  config.backlash = backlash;
+  systemConfig.backlash = backlash;
   saveConfig();
 }
 
 void setGotoProfile(const GotoProfile& profile) {
-  config.gotoProfile = profile;
+  systemConfig.gotoProfile = profile;
   saveConfig();
 }
 
 void setPolarAligned(bool aligned) {
-  config.polarAligned = aligned;
+  systemConfig.polarAligned = aligned;
   saveConfig();
 }
 
 void setRtcEpoch(uint32_t epoch) {
-  config.lastRtcEpoch = epoch;
+  systemConfig.lastRtcEpoch = epoch;
   saveConfig();
 }
 
