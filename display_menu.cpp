@@ -1128,14 +1128,6 @@ void startGotoToSelected() {
   }
 }
 
-void stopTracking() {
-  tracking.active = false;
-  tracking.userAdjusting = false;
-  systemState.trackingActive = false;
-  motion::setTrackingEnabled(false);
-  motion::setTrackingRates(0.0, 0.0);
-}
-
 void handleMainMenuInput(int delta) {
   if (delta != 0) {
     mainMenuIndex += delta;
@@ -1346,6 +1338,14 @@ void handlePolarAlignInput() {
 
 }  // namespace
 
+void stopTracking() {
+  tracking.active = false;
+  tracking.userAdjusting = false;
+  systemState.trackingActive = false;
+  motion::setTrackingEnabled(false);
+  motion::setTrackingRates(0.0, 0.0);
+}
+
 void init() {
   Wire.begin(config::SDA_PIN, config::SCL_PIN);
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
@@ -1460,7 +1460,7 @@ void handleInput() {
     case UiState::CatalogBrowser:
       handleCatalogInput(delta);
       break;
-    case UiState::AxisCalibration:
+    case UiState::AxisCalibration: {
       if (consumeJoystickBackEvent() || input::consumeJoystickPress()) {
         setUiState(UiState::SetupMenu);
         break;
@@ -1473,6 +1473,7 @@ void handleInput() {
         handleAxisCalibrationClick();
       }
       break;
+    }
     case UiState::GotoSpeed:
       handleGotoSpeedInput(delta);
       break;
