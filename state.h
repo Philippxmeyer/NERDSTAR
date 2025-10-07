@@ -17,8 +17,9 @@ struct SystemState {
   bool sdAvailable;
   bool gotoActive;
   int selectedCatalogIndex;
-  int64_t raGotoTarget;
-  int64_t decGotoTarget;
+  int64_t azGotoTarget;
+  int64_t altGotoTarget;
+  bool joystickActive;
 };
 
 extern SystemState systemState;

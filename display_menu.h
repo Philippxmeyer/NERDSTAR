@@ -16,6 +16,7 @@ void completePolarAlignment();
 void startPolarAlignment();
 void update();
 void setSdAvailable(bool available);
+void stopTracking();
 
 } // namespace display_menu
 

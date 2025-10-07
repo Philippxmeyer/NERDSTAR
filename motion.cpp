@@ -8,14 +8,21 @@
 
 namespace {
 
-AxisCalibration calibration{
-    (config::FULLSTEPS_PER_REV * config::MICROSTEPS * config::GEAR_RATIO) / 24.0,
-    (config::FULLSTEPS_PER_REV * config::MICROSTEPS * config::GEAR_RATIO) / 360.0,
-    0,
-    0};
+constexpr double kStepsPerAxisRev =
+    config::FULLSTEPS_PER_REV * config::MICROSTEPS * config::GEAR_RATIO;
 
-double siderealStepsPerSecond =
-    (calibration.stepsPerHourRA * 24.0) / config::SIDEREAL_DAY_SECONDS;
+AxisCalibration calibration{(config::FULLSTEPS_PER_REV * config::MICROSTEPS *
+                             config::GEAR_RATIO) /
+                                360.0,
+                             (config::FULLSTEPS_PER_REV * config::MICROSTEPS *
+                              config::GEAR_RATIO) /
+                                360.0,
+                             0,
+                             0};
+
+BacklashConfig backlash{0, 0};
+
+bool trackingEnabled = false;
 
 struct AxisState {
   uint8_t enPin;
@@ -26,36 +33,40 @@ struct AxisState {
   volatile bool stepState;
   volatile int64_t stepCounter;
   volatile int8_t direction;
-  double manualStepsPerSecond;
+  double userStepsPerSecond;
+  double gotoStepsPerSecond;
   double trackingStepsPerSecond;
+  int8_t lastDirection;
 };
 
-AxisState axisRA{
-    config::EN_RA,
-    config::DIR_RA,
-    config::STEP_RA,
-    nullptr,
-    portMUX_INITIALIZER_UNLOCKED,
-    false,
-    0,
-    1,
-    0.0,
-    0.0};
+AxisState axisAz{config::EN_RA,
+                 config::DIR_RA,
+                 config::STEP_RA,
+                 nullptr,
+                 portMUX_INITIALIZER_UNLOCKED,
+                 false,
+                 0,
+                 1,
+                 0.0,
+                 0.0,
+                 0.0,
+                 0};
 
-AxisState axisDEC{
-    config::EN_DEC,
-    config::DIR_DEC,
-    config::STEP_DEC,
-    nullptr,
-    portMUX_INITIALIZER_UNLOCKED,
-    false,
-    0,
-    1,
-    0.0,
-    0.0};
+AxisState axisAlt{config::EN_DEC,
+                  config::DIR_DEC,
+                  config::STEP_DEC,
+                  nullptr,
+                  portMUX_INITIALIZER_UNLOCKED,
+                  false,
+                  0,
+                  1,
+                  0.0,
+                  0.0,
+                  0.0,
+                  0};
 
-TMC2209Stepper driverRA(&Serial2, config::R_SENSE, config::DRIVER_ADDR_RA);
-TMC2209Stepper driverDEC(&Serial1, config::R_SENSE, config::DRIVER_ADDR_DEC);
+TMC2209Stepper driverAz(&Serial2, config::R_SENSE, config::DRIVER_ADDR_RA);
+TMC2209Stepper driverAlt(&Serial1, config::R_SENSE, config::DRIVER_ADDR_DEC);
 
 void IRAM_ATTR handleAxisStep(AxisState& axis) {
   portENTER_CRITICAL_ISR(&axis.mux);
@@ -67,22 +78,23 @@ void IRAM_ATTR handleAxisStep(AxisState& axis) {
   portEXIT_CRITICAL_ISR(&axis.mux);
 }
 
-void IRAM_ATTR onStepRA() { handleAxisStep(axisRA); }
-void IRAM_ATTR onStepDEC() { handleAxisStep(axisDEC); }
+void IRAM_ATTR onStepAz() { handleAxisStep(axisAz); }
+void IRAM_ATTR onStepAlt() { handleAxisStep(axisAlt); }
 
 AxisState& getAxisState(Axis axis) {
-  return (axis == Axis::RA) ? axisRA : axisDEC;
+  return (axis == Axis::Az) ? axisAz : axisAlt;
 }
 
 void configureTimer(AxisState& axis, uint8_t timerIndex, void (*isr)()) {
-  axis.timer = timerBegin(timerIndex, 80, true); // 80MHz / 80 = 1 MHz base
+  axis.timer = timerBegin(timerIndex, 80, true);  // 80MHz / 80 = 1 MHz base
   timerAttachInterrupt(axis.timer, isr, true);
   timerAlarmWrite(axis.timer, 1000, true);
   timerAlarmDisable(axis.timer);
 }
 
 void applyAxisCommand(AxisState& axis) {
-  double totalSteps = axis.manualStepsPerSecond + axis.trackingStepsPerSecond;
+  double trackingContribution = trackingEnabled ? axis.trackingStepsPerSecond : 0.0;
+  double totalSteps = axis.userStepsPerSecond + axis.gotoStepsPerSecond + trackingContribution;
   if (fabs(totalSteps) < 0.1) {
     timerAlarmDisable(axis.timer);
     portENTER_CRITICAL(&axis.mux);
@@ -93,78 +105,110 @@ void applyAxisCommand(AxisState& axis) {
   }
 
   axis.direction = (totalSteps >= 0.0) ? 1 : -1;
+  axis.lastDirection = axis.direction;
   digitalWrite(axis.dirPin, axis.direction > 0 ? HIGH : LOW);
 
-  double freq = fabs(totalSteps) * 2.0; // toggle high/low
+  double freq = fabs(totalSteps) * 2.0;  // toggle high/low
   double periodUs = 1000000.0 / freq;
   if (periodUs < 50.0) {
-    periodUs = 50.0; // limit to avoid overwhelming timer
+    periodUs = 50.0;  // limit to avoid overwhelming timer
   }
   timerAlarmWrite(axis.timer, static_cast<uint64_t>(periodUs), true);
   timerAlarmEnable(axis.timer);
 }
 
-} // namespace
+}  // namespace
 
 namespace motion {
 
 void init() {
-  pinMode(axisRA.enPin, OUTPUT);
-  pinMode(axisRA.dirPin, OUTPUT);
-  pinMode(axisRA.stepPin, OUTPUT);
-  pinMode(axisDEC.enPin, OUTPUT);
-  pinMode(axisDEC.dirPin, OUTPUT);
-  pinMode(axisDEC.stepPin, OUTPUT);
+  pinMode(axisAz.enPin, OUTPUT);
+  pinMode(axisAz.dirPin, OUTPUT);
+  pinMode(axisAz.stepPin, OUTPUT);
+  pinMode(axisAlt.enPin, OUTPUT);
+  pinMode(axisAlt.dirPin, OUTPUT);
+  pinMode(axisAlt.stepPin, OUTPUT);
 
-  digitalWrite(axisRA.enPin, HIGH);
-  digitalWrite(axisDEC.enPin, HIGH);
-  digitalWrite(axisRA.stepPin, LOW);
-  digitalWrite(axisDEC.stepPin, LOW);
+  digitalWrite(axisAz.enPin, HIGH);
+  digitalWrite(axisAlt.enPin, HIGH);
+  digitalWrite(axisAz.stepPin, LOW);
+  digitalWrite(axisAlt.stepPin, LOW);
 
   Serial2.begin(115200, SERIAL_8N1, config::UART_RA_RX, config::UART_RA_TX);
-  driverRA.begin();
+  driverAz.begin();
   delay(50);
-  driverRA.pdn_disable(true);
-  driverRA.en_spreadCycle(false);
-  driverRA.rms_current(config::DRIVER_CURRENT_MA);
-  driverRA.microsteps(static_cast<uint16_t>(config::MICROSTEPS));
-  digitalWrite(axisRA.enPin, LOW);
+  driverAz.pdn_disable(true);
+  driverAz.en_spreadCycle(false);
+  driverAz.rms_current(config::DRIVER_CURRENT_MA);
+  driverAz.microsteps(static_cast<uint16_t>(config::MICROSTEPS));
+  digitalWrite(axisAz.enPin, LOW);
 
   Serial1.begin(115200, SERIAL_8N1, config::UART_DEC_RX, config::UART_DEC_TX);
-  driverDEC.begin();
+  driverAlt.begin();
   delay(50);
-  driverDEC.pdn_disable(true);
-  driverDEC.en_spreadCycle(false);
-  driverDEC.rms_current(config::DRIVER_CURRENT_MA);
-  driverDEC.microsteps(static_cast<uint16_t>(config::MICROSTEPS));
-  digitalWrite(axisDEC.enPin, LOW);
+  driverAlt.pdn_disable(true);
+  driverAlt.en_spreadCycle(false);
+  driverAlt.rms_current(config::DRIVER_CURRENT_MA);
+  driverAlt.microsteps(static_cast<uint16_t>(config::MICROSTEPS));
+  digitalWrite(axisAlt.enPin, LOW);
 
-  configureTimer(axisRA, 0, onStepRA);
-  configureTimer(axisDEC, 1, onStepDEC);
+  configureTimer(axisAz, 0, onStepAz);
+  configureTimer(axisAlt, 1, onStepAlt);
 
   stopAll();
 }
 
 void setManualRate(Axis axis, float rpm) {
+  double stepsPerSecond = (static_cast<double>(rpm) * kStepsPerAxisRev) / 60.0;
+  setManualStepsPerSecond(axis, stepsPerSecond);
+}
+
+void setManualStepsPerSecond(Axis axis, double stepsPerSecond) {
   AxisState& state = getAxisState(axis);
-  state.manualStepsPerSecond = (static_cast<double>(rpm) * kStepsPerAxisRev) / 60.0;
+  state.userStepsPerSecond = stepsPerSecond;
   applyAxisCommand(state);
 }
 
+void setGotoStepsPerSecond(Axis axis, double stepsPerSecond) {
+  AxisState& state = getAxisState(axis);
+  state.gotoStepsPerSecond = stepsPerSecond;
+  applyAxisCommand(state);
+}
+
+void clearGotoRates() {
+  axisAz.gotoStepsPerSecond = 0.0;
+  axisAlt.gotoStepsPerSecond = 0.0;
+  applyAxisCommand(axisAz);
+  applyAxisCommand(axisAlt);
+}
+
 void stopAll() {
-  axisRA.manualStepsPerSecond = 0.0;
-  axisDEC.manualStepsPerSecond = 0.0;
-  axisRA.trackingStepsPerSecond = 0.0;
-  axisDEC.trackingStepsPerSecond = 0.0;
-  timerAlarmDisable(axisRA.timer);
-  timerAlarmDisable(axisDEC.timer);
-  digitalWrite(axisRA.stepPin, LOW);
-  digitalWrite(axisDEC.stepPin, LOW);
+  axisAz.userStepsPerSecond = 0.0;
+  axisAlt.userStepsPerSecond = 0.0;
+  axisAz.gotoStepsPerSecond = 0.0;
+  axisAlt.gotoStepsPerSecond = 0.0;
+  axisAz.trackingStepsPerSecond = 0.0;
+  axisAlt.trackingStepsPerSecond = 0.0;
+  trackingEnabled = false;
+  timerAlarmDisable(axisAz.timer);
+  timerAlarmDisable(axisAlt.timer);
+  digitalWrite(axisAz.stepPin, LOW);
+  digitalWrite(axisAlt.stepPin, LOW);
 }
 
 void setTrackingEnabled(bool enabled) {
-  axisRA.trackingStepsPerSecond = enabled ? siderealStepsPerSecond : 0.0;
-  applyAxisCommand(axisRA);
+  trackingEnabled = enabled;
+  applyAxisCommand(axisAz);
+  applyAxisCommand(axisAlt);
+}
+
+void setTrackingRates(double azDegPerSec, double altDegPerSec) {
+  axisAz.trackingStepsPerSecond = azDegPerSec * calibration.stepsPerDegreeAz;
+  axisAlt.trackingStepsPerSecond = altDegPerSec * calibration.stepsPerDegreeAlt;
+  if (trackingEnabled) {
+    applyAxisCommand(axisAz);
+    applyAxisCommand(axisAlt);
+  }
 }
 
 int64_t getStepCount(Axis axis) {
@@ -182,18 +226,19 @@ void setStepCount(Axis axis, int64_t value) {
   portEXIT_CRITICAL(&state.mux);
 }
 
-double stepsToRaHours(int64_t steps) {
-  double adjusted = static_cast<double>(steps - calibration.raHomeOffset);
-  double hours = fmod(adjusted / calibration.stepsPerHourRA, 24.0);
-  if (hours < 0.0) {
-    hours += 24.0;
+double stepsToAzDegrees(int64_t steps) {
+  double adjusted = static_cast<double>(steps - calibration.azHomeOffset);
+  double degrees = adjusted / calibration.stepsPerDegreeAz;
+  degrees = fmod(degrees, 360.0);
+  if (degrees < 0.0) {
+    degrees += 360.0;
   }
-  return hours;
+  return degrees;
 }
 
-double stepsToDecDegrees(int64_t steps) {
-  double adjusted = static_cast<double>(steps - calibration.decHomeOffset);
-  double degrees = adjusted / calibration.stepsPerDegreeDEC;
+double stepsToAltDegrees(int64_t steps) {
+  double adjusted = static_cast<double>(steps - calibration.altHomeOffset);
+  double degrees = adjusted / calibration.stepsPerDegreeAlt;
   if (degrees > 180.0 || degrees < -180.0) {
     degrees = fmod(degrees, 360.0);
     if (degrees > 180.0) {
@@ -205,26 +250,36 @@ double stepsToDecDegrees(int64_t steps) {
   return degrees;
 }
 
-int64_t raHoursToSteps(double hours) {
-  double normalized = fmod(hours, 24.0);
-  if (normalized < 0.0) {
-    normalized += 24.0;
+int64_t azDegreesToSteps(double degrees) {
+  double wrapped = fmod(degrees, 360.0);
+  if (wrapped < 0.0) {
+    wrapped += 360.0;
   }
-  double steps = normalized * calibration.stepsPerHourRA + calibration.raHomeOffset;
+  double steps = wrapped * calibration.stepsPerDegreeAz + calibration.azHomeOffset;
   return static_cast<int64_t>(llround(steps));
 }
 
-int64_t decDegreesToSteps(double degrees) {
-  double steps = degrees * calibration.stepsPerDegreeDEC + calibration.decHomeOffset;
+int64_t altDegreesToSteps(double degrees) {
+  double steps = degrees * calibration.stepsPerDegreeAlt + calibration.altHomeOffset;
   return static_cast<int64_t>(llround(steps));
 }
 
 void applyCalibration(const AxisCalibration& newCalibration) {
   calibration = newCalibration;
-  siderealStepsPerSecond = (calibration.stepsPerHourRA * 24.0) / config::SIDEREAL_DAY_SECONDS;
-  applyAxisCommand(axisRA);
-  applyAxisCommand(axisDEC);
+  applyAxisCommand(axisAz);
+  applyAxisCommand(axisAlt);
 }
 
-} // namespace motion
+void setBacklash(const BacklashConfig& newBacklash) { backlash = newBacklash; }
+
+int32_t getBacklashSteps(Axis axis) {
+  return (axis == Axis::Az) ? backlash.azSteps : backlash.altSteps;
+}
+
+int8_t getLastDirection(Axis axis) {
+  AxisState& state = getAxisState(axis);
+  return state.lastDirection;
+}
+
+}  // namespace motion
 
