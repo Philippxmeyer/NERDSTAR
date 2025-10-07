@@ -1,6 +1,5 @@
-# 🤓✨ NERDSTAR
+![NERDSTAR Banner](docs/nerdstar-banner.svg)
 
-### Navigation, Elevation & Rotation Drive System for Telescope Alt/Az Regulation
 
 > *Because even the cosmos deserves a little nerd power.*
 
