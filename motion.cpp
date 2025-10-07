@@ -108,8 +108,7 @@ void configureTimer(AxisState& axis, uint8_t timerIndex, void (*isr)()) {
   constexpr uint32_t kTimerBaseHz = 1000000;  // 1 MHz tick frequency
   axis.timer = timerBegin(kTimerBaseHz);
   timerAttachInterrupt(axis.timer, isr);
-  timerSetAutoReload(axis.timer, true);
-  timerSetOverflow(axis.timer, 1000);
+  timerAlarmWrite(axis.timer, 1000, true);
   timerStop(axis.timer);
 #else
   axis.timer = timerBegin(timerIndex, 80, true);  // 80MHz / 80 = 1 MHz base
@@ -145,7 +144,7 @@ void applyAxisCommand(AxisState& axis) {
     periodUs = 50.0;  // limit to avoid overwhelming timer
   }
 #if MOTION_HAS_NEW_TIMER_API
-  timerSetOverflow(axis.timer, static_cast<uint64_t>(periodUs));
+  timerAlarmWrite(axis.timer, static_cast<uint64_t>(periodUs), true);
   timerWrite(axis.timer, 0);
   timerStart(axis.timer);
 #else
