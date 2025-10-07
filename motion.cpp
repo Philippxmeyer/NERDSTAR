@@ -1,24 +1,21 @@
+// motion.cpp — ESP32 Core 3.x only (uses esp_timer with TASK dispatch)
+
 #include "motion.h"
 
 #include <math.h>
-
+#include <Arduino.h>
 #include <TMCStepper.h>
 
-#if defined(ARDUINO_ARCH_ESP32)
-#include <esp32-hal.h>
-#include <esp32-hal-timer.h>
-#endif
+#include <esp32-hal.h>   // pinMode/digitalWrite, portMUX*
+#include <esp_timer.h>   // esp_timer (Task-Dispatch)
 
 #ifndef ESP_ARDUINO_VERSION_VAL
 #define ESP_ARDUINO_VERSION_VAL(major, minor, patch) \
   ((major << 16) | (minor << 8) | (patch))
 #endif
 
-#if defined(ESP_ARDUINO_VERSION) && \
-    (ESP_ARDUINO_VERSION >= ESP_ARDUINO_VERSION_VAL(3, 0, 0))
-#define MOTION_HAS_NEW_TIMER_API 1
-#else
-#define MOTION_HAS_NEW_TIMER_API 0
+#if !defined(ESP_ARDUINO_VERSION) || (ESP_ARDUINO_VERSION < ESP_ARDUINO_VERSION_VAL(3,0,0))
+#error "This motion.cpp requires Arduino-ESP32 Core >= 3.0.0"
 #endif
 
 #include "calibration.h"
@@ -28,14 +25,11 @@ namespace {
 constexpr double kStepsPerAxisRev =
     config::FULLSTEPS_PER_REV * config::MICROSTEPS * config::GEAR_RATIO;
 
-AxisCalibration calibration{(config::FULLSTEPS_PER_REV * config::MICROSTEPS *
-                             config::GEAR_RATIO) /
-                                360.0,
-                             (config::FULLSTEPS_PER_REV * config::MICROSTEPS *
-                              config::GEAR_RATIO) /
-                                360.0,
-                             0,
-                             0};
+AxisCalibration calibration{
+    (config::FULLSTEPS_PER_REV * config::MICROSTEPS * config::GEAR_RATIO) / 360.0,
+    (config::FULLSTEPS_PER_REV * config::MICROSTEPS * config::GEAR_RATIO) / 360.0,
+    0,
+    0};
 
 BacklashConfig backlash{0, 0};
 
@@ -45,7 +39,7 @@ struct AxisState {
   uint8_t enPin;
   uint8_t dirPin;
   uint8_t stepPin;
-  hw_timer_t* timer;
+  esp_timer_handle_t timer;       // Core 3.x: esp_timer (TASK dispatch)
   portMUX_TYPE mux;
   volatile bool stepState;
   volatile int64_t stepCounter;
@@ -85,48 +79,46 @@ AxisState axisAlt{config::EN_DEC,
 TMC2209Stepper driverAz(&Serial2, config::R_SENSE, config::DRIVER_ADDR_RA);
 TMC2209Stepper driverAlt(&Serial1, config::R_SENSE, config::DRIVER_ADDR_DEC);
 
-void IRAM_ATTR handleAxisStep(AxisState& axis) {
-  portENTER_CRITICAL_ISR(&axis.mux);
+// Achtung: Wir laufen im TASK-Kontext (nicht ISR). Daher _ohne_ ISR-Makros.
+void handleAxisStep(AxisState& axis) {
+  portENTER_CRITICAL(&axis.mux);
   axis.stepState = !axis.stepState;
   digitalWrite(axis.stepPin, axis.stepState);
   if (axis.stepState) {
     axis.stepCounter += axis.direction;
   }
-  portEXIT_CRITICAL_ISR(&axis.mux);
+  portEXIT_CRITICAL(&axis.mux);
 }
 
-void IRAM_ATTR onStepAz() { handleAxisStep(axisAz); }
-void IRAM_ATTR onStepAlt() { handleAxisStep(axisAlt); }
+void onStepAz() { handleAxisStep(axisAz); }
+void onStepAlt() { handleAxisStep(axisAlt); }
+
+// esp_timer-Callback trampolinen wir auf obige Funktionen
+void timer_trampoline(void* arg) {
+  auto fn = reinterpret_cast<void (*)()>(arg);
+  fn();
+}
 
 AxisState& getAxisState(Axis axis) {
   return (axis == Axis::Az) ? axisAz : axisAlt;
 }
 
-void configureTimer(AxisState& axis, uint8_t timerIndex, void (*isr)()) {
-#if MOTION_HAS_NEW_TIMER_API
-  (void)timerIndex;
-  constexpr uint32_t kTimerBaseHz = 1000000;  // 1 MHz tick frequency
-  axis.timer = timerBegin(kTimerBaseHz);
-  timerAttachInterrupt(axis.timer, isr);
-  timerAlarmWrite(axis.timer, 1000, true);
-  timerStop(axis.timer);
-#else
-  axis.timer = timerBegin(timerIndex, 80, true);  // 80MHz / 80 = 1 MHz base
-  timerAttachInterrupt(axis.timer, isr, true);
-  timerAlarmWrite(axis.timer, 1000, true);
-  timerAlarmDisable(axis.timer);
-#endif
+void configureTimer(AxisState& axis, uint8_t /*timerIndex*/, void (*isr)()) {
+  esp_timer_create_args_t args{};
+  args.callback = &timer_trampoline;
+  args.arg = reinterpret_cast<void*>(isr);
+  args.dispatch_method = ESP_TIMER_TASK;  // kein ISR-Dispatch in deinem Core
+  args.name = "axis";
+  ESP_ERROR_CHECK(esp_timer_create(&args, &axis.timer));
+  // Start/Periode erfolgt in applyAxisCommand()
 }
 
 void applyAxisCommand(AxisState& axis) {
   double trackingContribution = trackingEnabled ? axis.trackingStepsPerSecond : 0.0;
   double totalSteps = axis.userStepsPerSecond + axis.gotoStepsPerSecond + trackingContribution;
+
   if (fabs(totalSteps) < 0.1) {
-#if MOTION_HAS_NEW_TIMER_API
-    timerStop(axis.timer);
-#else
-    timerAlarmDisable(axis.timer);
-#endif
+    (void)esp_timer_stop(axis.timer);   // ignoriert Fehler, falls schon gestoppt
     portENTER_CRITICAL(&axis.mux);
     axis.stepState = false;
     portEXIT_CRITICAL(&axis.mux);
@@ -138,19 +130,16 @@ void applyAxisCommand(AxisState& axis) {
   axis.lastDirection = axis.direction;
   digitalWrite(axis.dirPin, axis.direction > 0 ? HIGH : LOW);
 
-  double freq = fabs(totalSteps) * 2.0;  // toggle high/low
+  // Toggle-Frequenz (HIGH/LOW) -> Periodendauer in µs
+  double freq = fabs(totalSteps) * 2.0;
   double periodUs = 1000000.0 / freq;
   if (periodUs < 50.0) {
-    periodUs = 50.0;  // limit to avoid overwhelming timer
+    periodUs = 50.0;  // CPU-Load/Jitter begrenzen
   }
-#if MOTION_HAS_NEW_TIMER_API
-  timerAlarmWrite(axis.timer, static_cast<uint64_t>(periodUs), true);
-  timerWrite(axis.timer, 0);
-  timerStart(axis.timer);
-#else
-  timerAlarmWrite(axis.timer, static_cast<uint64_t>(periodUs), true);
-  timerAlarmEnable(axis.timer);
-#endif
+
+  // esp_timer hat kein „SetOverflow“ -> stop + start_periodic
+  (void)esp_timer_stop(axis.timer);
+  ESP_ERROR_CHECK(esp_timer_start_periodic(axis.timer, static_cast<uint64_t>(periodUs)));
 }
 
 }  // namespace
@@ -226,13 +215,10 @@ void stopAll() {
   axisAz.trackingStepsPerSecond = 0.0;
   axisAlt.trackingStepsPerSecond = 0.0;
   trackingEnabled = false;
-#if MOTION_HAS_NEW_TIMER_API
-  timerStop(axisAz.timer);
-  timerStop(axisAlt.timer);
-#else
-  timerAlarmDisable(axisAz.timer);
-  timerAlarmDisable(axisAlt.timer);
-#endif
+
+  (void)esp_timer_stop(axisAz.timer);
+  (void)esp_timer_stop(axisAlt.timer);
+
   digitalWrite(axisAz.stepPin, LOW);
   digitalWrite(axisAlt.stepPin, LOW);
 }
@@ -323,4 +309,3 @@ int8_t getLastDirection(Axis axis) {
 }
 
 }  // namespace motion
-
