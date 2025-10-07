@@ -1,4 +1,4 @@
-![NERDSTAR Banner](docs/nerdstar-banner.svg)
+![NERDSTAR Banner](docs/nerdstar-banner.svg?raw=true)
 
 
 > *Because even the cosmos deserves a little nerd power.*
