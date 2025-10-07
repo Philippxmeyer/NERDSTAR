@@ -12,7 +12,7 @@ dein Teleskop mit der Präzision eines NASA-Gyros und dem Charme eines Bastelkel
 
 Zwei **TMC2209**-Treiber, ein **Joystick**, ein **OLED**, eine **RTC**
 und ein Hauch Größenwahn ergeben zusammen ein
-**Alt/Az-Steuerungssystem mit µs-Timing und Stil**.
+**RA/DEC-Steuerungssystem mit µs-Timing und Stil**.
 
 > Kein KI-Overkill.
 > Nur ehrlicher Schrittmotor-Schweiß und ein bisschen Mathematik.
@@ -21,15 +21,18 @@ und ein Hauch Größenwahn ergeben zusammen ein
 
 ## 🧬 Features
 
-| Kategorie                     | Beschreibung                                                           |
-| ----------------------------- | ---------------------------------------------------------------------- |
-| 🔭 **Dual Axis Control**      | Zwei Achsen (Azimuth & Altitude) mit unabhängigen Hardware-Timern      |
-| 🔹 **Joystick Navigation**    | X = Azimut, Y = Höhe, Taste = Pause, Spaßfaktor = Hoch                 |
-| 🕒 **RTC DS3231**             | Präzise Zeitsynchronisierung (später wichtig für Tracking)             |
-| 📺 **OLED Status Display**    | Zeigt Live-RPM, Zeit, Systemstatus                                     |
-| ⚙️ **µs-Timersteuerung**      | Stepper laufen so gleichmäßig, dass man sie fast atmen hört            |
-| 🧠 **ESP32 Dual-Core**        | Core 1 = Stepper / Core 0 = Display – keine Ruckler, keine Kompromisse |
-| 🧮 **Alt/Az Framework Ready** | Platz für Astronomie-Formeln, trigonometrische Eskapaden & Sternzeit   |
+| Kategorie                     | Beschreibung                                                                 |
+| ----------------------------- | ---------------------------------------------------------------------------- |
+| 🔭 **Dual Axis Control**      | Zwei Achsen (RA & DEC) mit unabhängigen µs-Hardware-Timern                  |
+| 🔹 **Joystick Navigation**    | Joystick für manuelles Slewen, Encoder für Menüs                            |
+| 🧭 **Goto & Catalog**         | Objektbibliothek auf SD, Auswahl per Encoder, automatisches Goto             |
+| 💾 **SD-Objektbibliothek**    | 200 vorkonfigurierte Sterne/Nebel/Galaxien/Planeten als CSV, automatisch geladen |
+| 🕒 **RTC DS3231**             | Uhrzeit via Setup-Menü setzen, Grundlage für Planetenpositionen             |
+| 🪐 **Planetenberechnung**     | Schlanker Algorithmus liefert aktuelle RA/Dec für klassische Planeten       |
+| 🔧 **Setup & Kalibrierung**   | Menü für RTC-Zeit, Joystick-Zentrum, Achsenkalibrierung & EEPROM-Speicher   |
+| 📺 **OLED Status Display**    | Zeigt RA/Dec, Tracking-/Goto-Status und gewähltes Ziel                      |
+| ⚙️ **µs-Timersteuerung**      | Stepper laufen so gleichmäßig, dass man sie fast atmen hört                |
+| 🧠 **ESP32 Dual-Core**        | Core 1 = Stepper / Core 0 = Display – keine Ruckler, keine Kompromisse       |
 
 ---
 
@@ -49,11 +52,12 @@ und irgendwann sagen: „Lauf, kleiner ESP, lauf mit den Sternen.“
 | Komponente             | Aufgabe                             | Pins                                  |
 | ---------------------- | ----------------------------------- | ------------------------------------- |
 | **ESP32**              | Gehirn                              | –                                     |
-| **TMC2209 (Azimut)**   | Dreht nach links/rechts             | STEP 25, DIR 26, EN 27, RX/TX = 16/17 |
-| **TMC2209 (Altitude)** | Dreht nach oben/unten               | STEP 13, DIR 12, EN 14, RX/TX = 4/5   |
+| **TMC2209 (RA)**       | Dreht um die Rektaszensions-Achse   | STEP 25, DIR 26, EN 27, RX/TX = 16/17 |
+| **TMC2209 (DEC)**      | Dreht um die Deklinations-Achse     | STEP 13, DIR 12, EN 14, RX/TX = 4/5   |
 | **OLED (SSD1306)**     | Zeigt alles an, außer Mitleid       | I²C: SDA 21, SCL 22                   |
 | **RTC (DS3231)**       | Sagt dir, wann du’s verpasst hast   | I²C: SDA 21, SCL 22                   |
 | **Joystick (KY-023)**  | Steuert alles intuitiv falsch herum | VRx 34, VRy 35, SW 32                 |
+| **SD-Karte**           | Bibliothek mit Lieblingsobjekten    | CS 15, SPI laut Board                 |
 
 ---
 
@@ -62,57 +66,69 @@ und irgendwann sagen: „Lauf, kleiner ESP, lauf mit den Sternen.“
 ```
 NERDSTAR/
 │
-├── NERDSTAR.ino          # Der eigentliche Wahnsinn
-├── README.md              # Dieses Manifest
-├── LICENSE                # Vermutlich MIT, weil wir nett sind
-└── docs/
-    ├── wiring-diagram.png # Irgendwann mal
-    └── hardware-notes.md  # Vielleicht
+├── NERDSTAR.ino           # Orchestriert Setup/Loop
+├── catalog.cpp/.h         # SD-Objektbibliothek & Parser
+├── catalog_data.h         # 200 Beispielobjekte als XML-Fallback
+├── display_menu.cpp/.h    # OLED-Menüs, Setup, Goto, Polar Align
+├── input.cpp/.h           # Joystick + Encoder Handling
+├── motion.cpp/.h          # Stepper-Steuerung, Tracking, Kalibrierung
+├── planets.cpp/.h         # Schlanke Planeten-Ephemeriden
+├── storage.cpp/.h         # EEPROM & SD Initialisierung
+├── config.h               # Pinout & Konstanten
+├── data/catalog.xml       # Beispiel-Datenbank für die SD-Karte
+├── docs/
+│   ├── BEDIENUNGSANLEITUNG.md # Schritt-für-Schritt-Bedienung
+│   └── nerdstar-banner.png    # Für die Optik
+├── LICENSE
+└── README.md
 ```
+
+---
+
+## 📖 Dokumentation & Daten
+
+- [Bedienungsanleitung](docs/BEDIENUNGSANLEITUNG.md) mit Schritt-für-Schritt-Anweisungen
+- Beispiel-Datenbank: [`data/catalog.xml`](data/catalog.xml) – auf die SD-Karte kopieren
+- Alle Kalibrierungen & Zustände werden im EEPROM des ESP32 abgelegt
 
 ---
 
 ## 📺 OLED-Anzeige
 
 ```
-NERDSTAR v1.0
-AZ: +1.23 RPM
-ALT: -0.87 RPM
-Time: 21:47:13
+NERDSTAR Status
+RA: 05h 34m 31s
+Dec: +22° 00' 52"
+Align: Yes  Trk: On
+Sel: Messier 042
+Goto: --
 ```
 
-> Wenn du das siehst, läuft’s.
-> Wenn nicht, läuft’s vermutlich auch – nur in die falsche Richtung.
+> Wenn du das siehst, weißt du wohin das Teleskop blickt.
+> Wenn nicht, hilft die [Bedienungsanleitung](docs/BEDIENUNGSANLEITUNG.md).
 
 ---
 
-## �� Tracking demnächst™
+## 🛰️ Nachführung & Goto
 
-NERDSTAR ist schon bereit für die große Bühne:
+- **Polar Alignment**: eigener Menüpunkt, speichert den Align-Status im EEPROM.
+- **Tracking**: siderisches Tracking nach erfolgreicher Ausrichtung per Knopfdruck.
+- **Goto**: Auswahl im Katalog, Start im Hauptmenü, Abbruch jederzeit über den Joystick.
+- **Planeten**: aktuelle Positionen werden aus der RTC-Zeit berechnet – keine statischen Tabellen.
 
-```cpp
-void computeTrackingRates(double latitude, double longitude, DateTime now) {
-  // TODO:
-  // 1. RA/DEC -> Alt/Az umrechnen
-  // 2. Sternzeit bestimmen
-  // 3. Schrittfrequenzen anpassen
-  // 4. Kaffee holen
-}
-```
-
-Ziel: das Teleskop bewegt sich exakt so,
-dass die Sterne stillstehen – oder wenigstens so tun.
+Kurz gesagt: Der ESP32 weiß, wohin es geht, und bleibt dank Tracking dort.
 
 ---
 
 ## 🧰 Abhängigkeiten
 
-| Bibliothek         | Zweck                     | Empfohlene Version |
-| ------------------ | ------------------------- | ------------------ |
-| `TMCStepper`       | Kommunikation mit TMC2209 | ≥ 0.7.3            |
-| `Adafruit_SSD1306` | OLED-Anzeige              | ≥ 2.5.9            |
-| `Adafruit_GFX`     | Grafik-Backend            | ≥ 1.11.9           |
-| `RTClib`           | DS3231 RTC                | ≥ 2.1.3            |
+| Bibliothek         | Zweck                              | Empfohlene Version |
+| ------------------ | ---------------------------------- | ------------------ |
+| `TMCStepper`       | Kommunikation mit TMC2209          | ≥ 0.7.3            |
+| `Adafruit_SSD1306` | OLED-Anzeige                       | ≥ 2.5.9            |
+| `Adafruit_GFX`     | Grafik-Backend                     | ≥ 1.11.9           |
+| `RTClib`           | DS3231 RTC                         | ≥ 2.1.3            |
+| `SD`               | Zugriff auf die Objektbibliothek   | Arduino Core       |
 
 ---
 
