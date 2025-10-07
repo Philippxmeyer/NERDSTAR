@@ -151,6 +151,25 @@ String infoMessage;
 uint32_t infoUntil = 0;
 portMUX_TYPE displayMux = portMUX_INITIALIZER_UNLOCKED;
 
+float joystickScrollAccumulator = 0.0f;
+uint32_t lastScrollUpdateMs = 0;
+bool joystickRightLatched = false;
+bool joystickLeftLatched = false;
+bool joystickSelectEvent = false;
+bool joystickBackEvent = false;
+
+bool consumeJoystickSelectEvent() {
+  bool triggered = joystickSelectEvent;
+  joystickSelectEvent = false;
+  return triggered;
+}
+
+bool consumeJoystickBackEvent() {
+  bool triggered = joystickBackEvent;
+  joystickBackEvent = false;
+  return triggered;
+}
+
 void setUiState(UiState state) {
   uiState = state;
 }
@@ -581,7 +600,15 @@ void handleGotoSpeedInput(int delta) {
   if (input::consumeJoystickPress()) {
     gotoSpeedState.fieldIndex = (gotoSpeedState.fieldIndex + 1) % 3;
   }
-  if (input::consumeEncoderClick()) {
+  if (consumeJoystickBackEvent()) {
+    setUiState(UiState::SetupMenu);
+    return;
+  }
+  bool select = input::consumeEncoderClick();
+  if (!select) {
+    select = consumeJoystickSelectEvent();
+  }
+  if (select) {
     GotoProfile profile{gotoSpeedState.maxSpeed, gotoSpeedState.acceleration, gotoSpeedState.deceleration};
     storage::setGotoProfile(profile);
     showInfo("Goto saved");
@@ -606,12 +633,16 @@ void completeBacklashCalibration() {
 }
 
 void handleBacklashCalibrationInput() {
-  if (input::consumeJoystickPress()) {
+  if (input::consumeJoystickPress() || consumeJoystickBackEvent()) {
     setUiState(UiState::SetupMenu);
     showInfo("Cal aborted");
     return;
   }
-  if (!input::consumeEncoderClick()) {
+  bool select = input::consumeEncoderClick();
+  if (!select) {
+    select = consumeJoystickSelectEvent();
+  }
+  if (!select) {
     return;
   }
   switch (backlashState.step) {
@@ -1111,7 +1142,12 @@ void handleMainMenuInput(int delta) {
     while (mainMenuIndex < 0) mainMenuIndex += static_cast<int>(kMainMenuCount);
     while (mainMenuIndex >= static_cast<int>(kMainMenuCount)) mainMenuIndex -= static_cast<int>(kMainMenuCount);
   }
-  if (!input::consumeEncoderClick()) {
+  consumeJoystickBackEvent();
+  bool select = input::consumeEncoderClick();
+  if (!select) {
+    select = consumeJoystickSelectEvent();
+  }
+  if (!select) {
     return;
   }
   switch (mainMenuIndex) {
@@ -1168,7 +1204,15 @@ void handleSetupMenuInput(int delta) {
     while (setupMenuIndex >= static_cast<int>(kSetupMenuCount))
       setupMenuIndex -= static_cast<int>(kSetupMenuCount);
   }
-  if (!input::consumeEncoderClick()) {
+  if (consumeJoystickBackEvent()) {
+    setUiState(UiState::MainMenu);
+    return;
+  }
+  bool select = input::consumeEncoderClick();
+  if (!select) {
+    select = consumeJoystickSelectEvent();
+  }
+  if (!select) {
     return;
   }
   switch (setupMenuIndex) {
@@ -1226,14 +1270,32 @@ void handleRtcInput(int delta) {
   if (input::consumeJoystickPress()) {
     rtcEdit.fieldIndex = (rtcEdit.fieldIndex + 1) % 6;
   }
-  if (input::consumeEncoderClick()) {
+  if (consumeJoystickBackEvent()) {
+    setUiState(UiState::SetupMenu);
+    return;
+  }
+  bool select = input::consumeEncoderClick();
+  if (!select) {
+    select = consumeJoystickSelectEvent();
+  }
+  if (select) {
     applyRtcEdit();
   }
 }
 
 void handleCatalogInput(int delta) {
   if (catalog::size() == 0) {
-    if (input::consumeEncoderClick() || input::consumeJoystickPress()) {
+    bool exit = input::consumeEncoderClick();
+    if (!exit) {
+      exit = input::consumeJoystickPress();
+    }
+    if (!exit) {
+      exit = consumeJoystickSelectEvent();
+    }
+    if (!exit) {
+      exit = consumeJoystickBackEvent();
+    }
+    if (exit) {
       setUiState(UiState::MainMenu);
     }
     return;
@@ -1244,7 +1306,15 @@ void handleCatalogInput(int delta) {
     while (catalogIndex < 0) catalogIndex += total;
     while (catalogIndex >= total) catalogIndex -= total;
   }
-  if (input::consumeEncoderClick()) {
+  if (consumeJoystickBackEvent()) {
+    setUiState(UiState::MainMenu);
+    return;
+  }
+  bool select = input::consumeEncoderClick();
+  if (!select) {
+    select = consumeJoystickSelectEvent();
+  }
+  if (select) {
     systemState.selectedCatalogIndex = catalogIndex;
     const CatalogObject* object = catalog::get(static_cast<size_t>(catalogIndex));
     if (object) {
@@ -1260,10 +1330,14 @@ void handleCatalogInput(int delta) {
 }
 
 void handlePolarAlignInput() {
-  if (input::consumeEncoderClick()) {
+  bool select = input::consumeEncoderClick();
+  if (!select) {
+    select = consumeJoystickSelectEvent();
+  }
+  if (select) {
     completePolarAlignment();
   }
-  if (input::consumeJoystickPress()) {
+  if (input::consumeJoystickPress() || consumeJoystickBackEvent()) {
     systemState.menuMode = MenuMode::Status;
     setUiState(UiState::MainMenu);
     showInfo("Align aborted");
@@ -1330,6 +1404,46 @@ void startTask() {
 void handleInput() {
   input::update();
   int delta = input::consumeEncoderDelta();
+  float joyY = input::getJoystickNormalizedY();
+  float joyX = input::getJoystickNormalizedX();
+  uint32_t nowMs = millis();
+  if (lastScrollUpdateMs == 0) {
+    lastScrollUpdateMs = nowMs;
+  }
+  float dt = (nowMs - lastScrollUpdateMs) / 1000.0f;
+  lastScrollUpdateMs = nowMs;
+  constexpr float kItemsPerSecond = 6.0f;
+  joystickScrollAccumulator += joyY * kItemsPerSecond * dt;
+  int joystickSteps = 0;
+  while (joystickScrollAccumulator >= 1.0f) {
+    joystickSteps += 1;
+    joystickScrollAccumulator -= 1.0f;
+  }
+  while (joystickScrollAccumulator <= -1.0f) {
+    joystickSteps -= 1;
+    joystickScrollAccumulator += 1.0f;
+  }
+  delta += joystickSteps;
+
+  constexpr float kHorizontalThreshold = 0.6f;
+  bool rightActive = joyX > kHorizontalThreshold;
+  bool leftActive = joyX < -kHorizontalThreshold;
+  if (rightActive) {
+    if (!joystickRightLatched) {
+      joystickRightLatched = true;
+      joystickSelectEvent = true;
+    }
+  } else {
+    joystickRightLatched = false;
+  }
+  if (leftActive) {
+    if (!joystickLeftLatched) {
+      joystickLeftLatched = true;
+      joystickBackEvent = true;
+    }
+  } else {
+    joystickLeftLatched = false;
+  }
   switch (uiState) {
     case UiState::MainMenu:
       handleMainMenuInput(delta);
@@ -1347,11 +1461,16 @@ void handleInput() {
       handleCatalogInput(delta);
       break;
     case UiState::AxisCalibration:
-      if (input::consumeEncoderClick()) {
-        handleAxisCalibrationClick();
-      }
-      if (input::consumeJoystickPress()) {
+      if (consumeJoystickBackEvent() || input::consumeJoystickPress()) {
         setUiState(UiState::SetupMenu);
+        break;
+      }
+      bool select = input::consumeEncoderClick();
+      if (!select) {
+        select = consumeJoystickSelectEvent();
+      }
+      if (select) {
+        handleAxisCalibrationClick();
       }
       break;
     case UiState::GotoSpeed:

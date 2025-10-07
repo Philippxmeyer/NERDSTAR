@@ -1,10 +1,7 @@
 #include "catalog.h"
 
 #include <SD.h>
-#include <algorithm>
 #include <vector>
-
-#include "catalog_data.h"
 
 namespace {
 
@@ -52,34 +49,7 @@ bool parseObjectElement(const String& line, CatalogObject& object) {
   return true;
 }
 
-bool ensureCatalogOnSd() {
-  if (SD.exists("/catalog.xml")) {
-    return true;
-  }
-  File file = SD.open("/catalog.xml", FILE_WRITE);
-  if (!file) {
-    return false;
-  }
-  size_t length = strlen_P(kDefaultCatalogXml);
-  constexpr size_t kChunk = 256;
-  char buffer[kChunk];
-  size_t offset = 0;
-  while (offset < length) {
-    size_t toCopy = std::min(kChunk, length - offset);
-    for (size_t i = 0; i < toCopy; ++i) {
-      buffer[i] = pgm_read_byte_near(kDefaultCatalogXml + offset + i);
-    }
-    file.write(reinterpret_cast<const uint8_t*>(buffer), toCopy);
-    offset += toCopy;
-  }
-  file.close();
-  return true;
-}
-
 bool loadCatalog() {
-  if (!ensureCatalogOnSd()) {
-    return false;
-  }
   File file = SD.open("/catalog.xml", FILE_READ);
   if (!file) {
     return false;
