@@ -16,7 +16,7 @@
    - Ready for coordinate math (Alt/Az tracking)
    ------------------------------------------------------------
    Author: Philipp
-   License: MIT
+   License: GNU General Public License v3.0
   ============================================================
 */
 
