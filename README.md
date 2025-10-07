@@ -68,7 +68,6 @@ NERDSTAR/
 │
 ├── NERDSTAR.ino           # Orchestriert Setup/Loop
 ├── catalog.cpp/.h         # SD-Objektbibliothek & Parser
-├── catalog_data.h         # 200 Beispielobjekte als XML-Fallback
 ├── display_menu.cpp/.h    # OLED-Menüs, Setup, Goto, Polar Align
 ├── input.cpp/.h           # Joystick + Encoder Handling
 ├── motion.cpp/.h          # Stepper-Steuerung, Tracking, Kalibrierung
