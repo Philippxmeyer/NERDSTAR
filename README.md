@@ -138,7 +138,7 @@ dass die Sterne stillstehen – oder wenigstens so tun.
 
 ## 💩 Lizenz
 
-MIT License © 2025 Philipp
+GNU General Public License v3.0 © 2025 Philipp
 
 > Benutze, forke, modifiziere – aber denk dran:
 > Auch im Weltall gilt: Kein Support bei falscher Polausrichtung.
