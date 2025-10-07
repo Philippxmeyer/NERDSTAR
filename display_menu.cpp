@@ -263,6 +263,18 @@ double shortestAngularDistance(double from, double to) {
   return diff;
 }
 
+double applyAtmosphericRefraction(double geometricAltitudeDeg) {
+  if (geometricAltitudeDeg < -1.0 || geometricAltitudeDeg > 90.0) {
+    return geometricAltitudeDeg;
+  }
+
+  double altitudeWithOffset =
+      geometricAltitudeDeg + 10.3 / (geometricAltitudeDeg + 5.11);
+  double refractionArcMinutes =
+      1.02 / tan(degToRad(altitudeWithOffset));
+  return geometricAltitudeDeg + refractionArcMinutes / 60.0;
+}
+
 DateTime currentDateTime() {
   if (rtcAvailable) {
     return rtc.now();
@@ -328,15 +340,17 @@ bool raDecToAltAz(const DateTime& when,
 
   double sinAlt = sin(decRad) * sin(latRad) + cos(decRad) * cos(latRad) * cos(haRad);
   sinAlt = std::clamp(sinAlt, -1.0, 1.0);
-  altitudeDeg = radToDeg(asin(sinAlt));
+  double geometricAltitudeDeg = radToDeg(asin(sinAlt));
 
-  double cosAz = (sin(decRad) - sinAlt * sin(latRad)) / (cos(degToRad(altitudeDeg)) * cos(latRad));
+  double cosAz = (sin(decRad) - sinAlt * sin(latRad)) /
+                 (cos(degToRad(geometricAltitudeDeg)) * cos(latRad));
   cosAz = std::clamp(cosAz, -1.0, 1.0);
   double azRad = acos(cosAz);
   if (sin(haRad) > 0) {
     azRad = 2 * PI - azRad;
   }
   azimuthDeg = wrapAngle360(radToDeg(azRad));
+  altitudeDeg = applyAtmosphericRefraction(geometricAltitudeDeg);
   return altitudeDeg > -5.0;  // allow slight tolerance below horizon
 }
 
