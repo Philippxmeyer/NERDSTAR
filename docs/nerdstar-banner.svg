@@ -1,0 +1,61 @@
+<svg width="960" height="280" viewBox="0 0 960 280" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0b0d19"/>
+      <stop offset="100%" stop-color="#1d2340"/>
+    </linearGradient>
+    <linearGradient id="star" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#ffe680"/>
+      <stop offset="100%" stop-color="#ffcf33"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="4" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Hintergrund -->
+  <rect width="960" height="280" fill="url(#bg)"/>
+
+  <!-- Sterne -->
+  <g fill="#fff" opacity="0.6">
+    <circle cx="100" cy="60" r="1.5"/>
+    <circle cx="300" cy="40" r="1.2"/>
+    <circle cx="520" cy="80" r="1.7"/>
+    <circle cx="820" cy="100" r="2.0"/>
+    <circle cx="740" cy="200" r="1.4"/>
+    <circle cx="180" cy="220" r="1.0"/>
+  </g>
+
+  <!-- Hauptstern -->
+  <g transform="translate(840 140)">
+    <polygon points="0,-20 4,-4 20,0 4,4 0,20 -4,4 -20,0 -4,-4"
+             fill="url(#star)" filter="url(#glow)" />
+  </g>
+
+  <!-- Schriftzug -->
+  <text x="80" y="160"
+        font-family="Orbitron, 'Segoe UI', sans-serif"
+        font-weight="700"
+        font-size="72"
+        fill="#fff"
+        letter-spacing="4px">NERDSTAR</text>
+
+  <!-- Untertitel -->
+  <text x="85" y="200"
+        font-family="'Fira Code', monospace"
+        font-size="20"
+        fill="#9fa8ff"
+        opacity="0.8">
+    Navigation, Elevation & Rotation Drive System for Telescope Alt/Az Regulation
+  </text>
+
+  <!-- Deko-Orbit -->
+  <ellipse cx="840" cy="140" rx="80" ry="28"
+           stroke="#ffd54f" stroke-width="1.5"
+           fill="none" opacity="0.5"
+           transform="rotate(-10 840 140)" />
+</svg>
