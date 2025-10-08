@@ -3,6 +3,7 @@
 #include <EEPROM.h>
 #include <SD.h>
 #include <SPI.h>
+#include <math.h>
 
 #include "config.h"
 
@@ -17,6 +18,9 @@ SystemConfig systemConfig{
     {0.0, 0.0, 0, 0},
     {0, 0},
     {3.0f, 1.0f, 1.0f},
+    config::OBSERVER_LATITUDE_DEG,
+    config::OBSERVER_LONGITUDE_DEG,
+    60,
     false,
     false,
     false,
@@ -37,6 +41,9 @@ void applyDefaults() {
   systemConfig.gotoProfile.maxSpeedDegPerSec = 3.0f;
   systemConfig.gotoProfile.accelerationDegPerSec2 = 1.0f;
   systemConfig.gotoProfile.decelerationDegPerSec2 = 1.0f;
+  systemConfig.observerLatitudeDeg = config::OBSERVER_LATITUDE_DEG;
+  systemConfig.observerLongitudeDeg = config::OBSERVER_LONGITUDE_DEG;
+  systemConfig.timezoneOffsetMinutes = 60;
   systemConfig.joystickCalibrated = false;
   systemConfig.axisCalibrated = false;
   systemConfig.polarAligned = false;
@@ -69,6 +76,17 @@ bool init() {
     }
     if (systemConfig.backlash.azSteps < 0) systemConfig.backlash.azSteps = 0;
     if (systemConfig.backlash.altSteps < 0) systemConfig.backlash.altSteps = 0;
+    if (!isfinite(systemConfig.observerLatitudeDeg) || systemConfig.observerLatitudeDeg < -90.0 ||
+        systemConfig.observerLatitudeDeg > 90.0) {
+      systemConfig.observerLatitudeDeg = config::OBSERVER_LATITUDE_DEG;
+    }
+    if (!isfinite(systemConfig.observerLongitudeDeg) || systemConfig.observerLongitudeDeg < -180.0 ||
+        systemConfig.observerLongitudeDeg > 180.0) {
+      systemConfig.observerLongitudeDeg = config::OBSERVER_LONGITUDE_DEG;
+    }
+    if (systemConfig.timezoneOffsetMinutes < -720 || systemConfig.timezoneOffsetMinutes > 840) {
+      systemConfig.timezoneOffsetMinutes = 60;
+    }
   }
 
   sdAvailable = SD.begin(config::SD_CS_PIN);
@@ -106,6 +124,13 @@ void setPolarAligned(bool aligned) {
 
 void setRtcEpoch(uint32_t epoch) {
   systemConfig.lastRtcEpoch = epoch;
+  saveConfig();
+}
+
+void setObserverLocation(double latitudeDeg, double longitudeDeg, int32_t timezoneMinutes) {
+  systemConfig.observerLatitudeDeg = latitudeDeg;
+  systemConfig.observerLongitudeDeg = longitudeDeg;
+  systemConfig.timezoneOffsetMinutes = timezoneMinutes;
   saveConfig();
 }
 
