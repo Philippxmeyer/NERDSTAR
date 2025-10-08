@@ -10,6 +10,9 @@ struct SystemConfig {
   AxisCalibration axisCalibration;
   BacklashConfig backlash;
   GotoProfile gotoProfile;
+  double observerLatitudeDeg;
+  double observerLongitudeDeg;
+  int32_t timezoneOffsetMinutes;
   bool joystickCalibrated;
   bool axisCalibrated;
   bool polarAligned;
@@ -26,6 +29,7 @@ void setBacklash(const BacklashConfig& backlash);
 void setGotoProfile(const GotoProfile& profile);
 void setPolarAligned(bool aligned);
 void setRtcEpoch(uint32_t epoch);
+void setObserverLocation(double latitudeDeg, double longitudeDeg, int32_t timezoneMinutes);
 void save();
 bool isSdAvailable();
 

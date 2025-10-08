@@ -26,17 +26,20 @@ bool rtcAvailable = false;
 bool sdAvailable = false;
 
 enum class UiState {
+  StatusScreen,
   MainMenu,
   PolarAlign,
   SetupMenu,
   SetRtc,
+  LocationSetup,
   CatalogBrowser,
   AxisCalibration,
   GotoSpeed,
+  GotoCoordinates,
   BacklashCalibration,
 };
 
-UiState uiState = UiState::MainMenu;
+UiState uiState = UiState::StatusScreen;
 
 struct RtcEditState {
   int year;
@@ -132,17 +135,48 @@ struct BacklashCalibrationState {
 GotoSpeedState gotoSpeedState{0.0f, 0.0f, 0.0f, 0};
 BacklashCalibrationState backlashState{0, 0, 0, 0, 0};
 
+struct LocationEditState {
+  double latitudeDeg;
+  double longitudeDeg;
+  int32_t timezoneMinutes;
+  int fieldIndex;
+};
+
+struct GotoCoordinateState {
+  int raHours;
+  int raMinutes;
+  int raSeconds;
+  bool decNegative;
+  int decDegrees;
+  int decArcMinutes;
+  int decArcSeconds;
+  int fieldIndex;
+};
+
+constexpr int kGotoCoordinateFieldCount = 8;
+
+LocationEditState locationEdit{0.0, 0.0, 60, 0};
+GotoCoordinateState gotoCoordinateState{0, 0, 0, false, 0, 0, 0, 0};
+double manualGotoRaHours = 0.0;
+double manualGotoDecDegrees = 0.0;
+
 String selectedObjectName;
 String gotoTargetName;
 
 int mainMenuIndex = 0;
-constexpr const char* kMainMenuItems[] = {
-    "Status", "Polar Align", "Start Tracking", "Stop Tracking", "Catalog", "Goto Selected", "Setup"};
+constexpr const char* kMainMenuItems[] = {"Status",
+                                          "Polar Align",
+                                          "Start Tracking",
+                                          "Stop Tracking",
+                                          "Catalog",
+                                          "Goto Selected",
+                                          "Goto RA/Dec",
+                                          "Setup"};
 constexpr size_t kMainMenuCount = sizeof(kMainMenuItems) / sizeof(kMainMenuItems[0]);
 
 int setupMenuIndex = 0;
 constexpr const char* kSetupMenuItems[] = {
-    "Set RTC", "Cal Joystick", "Cal Axes", "Goto Speed", "Cal Backlash", "Back"};
+    "Set RTC", "Set Location", "Cal Joystick", "Cal Axes", "Goto Speed", "Cal Backlash", "Back"};
 constexpr size_t kSetupMenuCount = sizeof(kSetupMenuItems) / sizeof(kSetupMenuItems[0]);
 
 int catalogIndex = 0;
@@ -151,28 +185,11 @@ String infoMessage;
 uint32_t infoUntil = 0;
 portMUX_TYPE displayMux = portMUX_INITIALIZER_UNLOCKED;
 
-float joystickScrollAccumulator = 0.0f;
-uint32_t lastScrollUpdateMs = 0;
-bool joystickRightLatched = false;
-bool joystickLeftLatched = false;
-bool joystickSelectEvent = false;
-bool joystickBackEvent = false;
-
-bool consumeJoystickSelectEvent() {
-  bool triggered = joystickSelectEvent;
-  joystickSelectEvent = false;
-  return triggered;
-}
-
-bool consumeJoystickBackEvent() {
-  bool triggered = joystickBackEvent;
-  joystickBackEvent = false;
-  return triggered;
-}
-
 void setUiState(UiState state) {
   uiState = state;
 }
+
+void abortGoto();
 
 void drawHeader() {
   display.setTextColor(SSD1306_WHITE);
@@ -224,6 +241,55 @@ void formatDec(double degrees, char* buffer, size_t length) {
     d += 1;
   }
   snprintf(buffer, length, "%c%02d%c %02d' %02d\"", sign, d, 0xB0, m, s);
+}
+
+String makeRaDecLabel(double raHours, double decDegrees) {
+  double normalizedRa = fmod(raHours, 24.0);
+  if (normalizedRa < 0.0) normalizedRa += 24.0;
+  int h = static_cast<int>(floor(normalizedRa));
+  double raMinutesFloat = (normalizedRa - h) * 60.0;
+  int m = static_cast<int>(floor(raMinutesFloat));
+  double raSecondsFloat = (raMinutesFloat - m) * 60.0;
+  int s = static_cast<int>(llround(raSecondsFloat));
+  if (s >= 60) {
+    s -= 60;
+    m += 1;
+  }
+  if (m >= 60) {
+    m -= 60;
+    h = (h + 1) % 24;
+  }
+  char raBuffer[16];
+  snprintf(raBuffer, sizeof(raBuffer), "%02d:%02d:%02d", h, m, s);
+
+  char sign = decDegrees >= 0.0 ? '+' : '-';
+  double absDec = fabs(decDegrees);
+  if (absDec > 90.0) absDec = 90.0;
+  int d = static_cast<int>(floor(absDec));
+  double decMinutesFloat = (absDec - d) * 60.0;
+  int decMinutes = static_cast<int>(floor(decMinutesFloat));
+  double decSecondsFloat = (decMinutesFloat - decMinutes) * 60.0;
+  int decSeconds = static_cast<int>(llround(decSecondsFloat));
+  if (decSeconds >= 60) {
+    decSeconds -= 60;
+    decMinutes += 1;
+  }
+  if (decMinutes >= 60) {
+    decMinutes -= 60;
+    if (d < 90) d += 1;
+  }
+  if (d >= 90) {
+    d = 90;
+    decMinutes = 0;
+    decSeconds = 0;
+  }
+  char decBuffer[16];
+  snprintf(decBuffer, sizeof(decBuffer), "%c%02d%c%02d'%02d\"", sign, d, 0xB0, decMinutes, decSeconds);
+
+  String label(raBuffer);
+  label += " / ";
+  label += decBuffer;
+  return label;
 }
 
 bool fetchInfoMessage(String& message) {
@@ -285,15 +351,23 @@ DateTime currentDateTime() {
   return DateTime(2024, 1, 1, 0, 0, 0);
 }
 
+DateTime toUtc(const DateTime& local) {
+  int32_t offsetMinutes = storage::getConfig().timezoneOffsetMinutes;
+  TimeSpan offset(static_cast<int32_t>(offsetMinutes) * 60);
+  return local - offset;
+}
+
 double hourFraction(const DateTime& time) {
   return time.hour() + time.minute() / 60.0 + time.second() / 3600.0;
 }
 
 double localSiderealDegrees(const DateTime& time) {
-  double jd = planets::julianDay(time.year(), time.month(), time.day(), hourFraction(time));
+  DateTime utc = toUtc(time);
+  double jd = planets::julianDay(utc.year(), utc.month(), utc.day(), hourFraction(utc));
   double T = (jd - 2451545.0) / 36525.0;
   double lst = 280.46061837 + 360.98564736629 * (jd - 2451545.0) +
-               0.000387933 * T * T - (T * T * T) / 38710000.0 + config::OBSERVER_LONGITUDE_DEG;
+               0.000387933 * T * T - (T * T * T) / 38710000.0 +
+               storage::getConfig().observerLongitudeDeg;
   return wrapAngle360(lst);
 }
 
@@ -305,8 +379,6 @@ void getObjectRaDecAt(const CatalogObject& object,
                       DateTime* futureTime) {
   DateTime future = when + TimeSpan(0, 0, 0, static_cast<int32_t>(secondsAhead));
   double fractional = secondsAhead - floor(secondsAhead);
-  double hour = future.hour() + future.minute() / 60.0 +
-                (future.second() + fractional) / 3600.0;
   raHours = object.raHours;
   decDegrees = object.decDegrees;
 
@@ -317,7 +389,9 @@ void getObjectRaDecAt(const CatalogObject& object,
   PlanetId planetId;
   if (object.type.equalsIgnoreCase("planet") &&
       planets::planetFromString(object.name, planetId)) {
-    double jd = planets::julianDay(future.year(), future.month(), future.day(), hour);
+    DateTime futureUtc = toUtc(future);
+    double jd = planets::julianDay(
+        futureUtc.year(), futureUtc.month(), futureUtc.day(), hourFraction(futureUtc) + fractional / 3600.0);
     PlanetPosition position;
     if (planets::computePlanet(planetId, jd, position)) {
       raHours = position.raHours;
@@ -334,7 +408,7 @@ bool raDecToAltAz(const DateTime& when,
   double lstDeg = localSiderealDegrees(when);
   double raDeg = raHours * 15.0;
   double haDeg = wrapAngle180(lstDeg - raDeg);
-  double latRad = degToRad(config::OBSERVER_LATITUDE_DEG);
+  double latRad = degToRad(storage::getConfig().observerLatitudeDeg);
   double haRad = degToRad(haDeg);
   double decRad = degToRad(decDegrees);
 
@@ -423,12 +497,18 @@ void drawStatus() {
   }
 }
 
+void drawStatusMenuPrompt() {
+  int footerY = config::OLED_HEIGHT - 8;
+  display.fillRect(0, footerY, config::OLED_WIDTH, 8, SSD1306_WHITE);
+  display.setTextColor(SSD1306_BLACK);
+  display.setCursor(0, footerY);
+  display.print("Menü");
+  display.setTextColor(SSD1306_WHITE);
+}
+
 void drawMainMenu() {
   for (size_t i = 0; i < kMainMenuCount; ++i) {
-    int y = 50 + static_cast<int>(i) * 8;
-    if (y >= config::OLED_HEIGHT) {
-      break;
-    }
+    int y = static_cast<int>(i) * 8;
     bool selected = static_cast<int>(i) == mainMenuIndex;
     if (selected) {
       display.fillRect(0, y, config::OLED_WIDTH, 8, SSD1306_WHITE);
@@ -487,6 +567,54 @@ void drawRtcEditor() {
   }
   display.setCursor(0, 60);
   display.print("Press enc=Save");
+}
+
+void drawLocationSetup() {
+  display.setCursor(0, 12);
+  display.print("Location");
+  int y = 24;
+  bool selected = locationEdit.fieldIndex == 0;
+  if (selected) {
+    display.fillRect(0, y, config::OLED_WIDTH, 8, SSD1306_WHITE);
+    display.setTextColor(SSD1306_BLACK);
+  }
+  display.setCursor(0, y);
+  display.printf("Lat: %+07.3f%c", locationEdit.latitudeDeg, 0xB0);
+  if (selected) {
+    display.setTextColor(SSD1306_WHITE);
+  }
+  y += 8;
+
+  selected = locationEdit.fieldIndex == 1;
+  if (selected) {
+    display.fillRect(0, y, config::OLED_WIDTH, 8, SSD1306_WHITE);
+    display.setTextColor(SSD1306_BLACK);
+  }
+  display.setCursor(0, y);
+  display.printf("Lon: %+08.3f%c", locationEdit.longitudeDeg, 0xB0);
+  if (selected) {
+    display.setTextColor(SSD1306_WHITE);
+  }
+  y += 8;
+
+  selected = locationEdit.fieldIndex == 2;
+  if (selected) {
+    display.fillRect(0, y, config::OLED_WIDTH, 8, SSD1306_WHITE);
+    display.setTextColor(SSD1306_BLACK);
+  }
+  int tz = locationEdit.timezoneMinutes;
+  int absTz = abs(tz);
+  int tzHours = absTz / 60;
+  int tzMinutes = absTz % 60;
+  char sign = tz >= 0 ? '+' : '-';
+  display.setCursor(0, y);
+  display.printf("TZ: %c%02d:%02d", sign, tzHours, tzMinutes);
+  if (selected) {
+    display.setTextColor(SSD1306_WHITE);
+  }
+
+  display.setCursor(0, 60);
+  display.print("Joy=Next Enc=Save");
 }
 
 void drawCatalog() {
@@ -587,6 +715,62 @@ void drawBacklashCalibration() {
   display.print("Joy btn = abort");
 }
 
+void drawGotoCoordinateEntry() {
+  display.setCursor(0, 12);
+  display.print("Goto RA/Dec");
+
+  auto drawSegment = [&](int fieldIndex, int x, int y, int width, const char* text) {
+    bool selected = gotoCoordinateState.fieldIndex == fieldIndex;
+    if (selected) {
+      display.fillRect(x, y, width, 8, SSD1306_WHITE);
+      display.setTextColor(SSD1306_BLACK);
+    }
+    display.setCursor(x, y);
+    display.print(text);
+    if (selected) {
+      display.setTextColor(SSD1306_WHITE);
+    }
+  };
+
+  int yRa = 24;
+  display.setCursor(0, yRa);
+  display.print("RA");
+  char buffer[8];
+  snprintf(buffer, sizeof(buffer), "%02dh", gotoCoordinateState.raHours);
+  drawSegment(0, 24, yRa, 24, buffer);
+  snprintf(buffer, sizeof(buffer), "%02dm", gotoCoordinateState.raMinutes);
+  drawSegment(1, 52, yRa, 24, buffer);
+  snprintf(buffer, sizeof(buffer), "%02ds", gotoCoordinateState.raSeconds);
+  drawSegment(2, 80, yRa, 24, buffer);
+
+  int yDec = 36;
+  display.setCursor(0, yDec);
+  display.print("Dec");
+  snprintf(buffer, sizeof(buffer), "%c", gotoCoordinateState.decNegative ? '-' : '+');
+  drawSegment(3, 24, yDec, 12, buffer);
+  snprintf(buffer, sizeof(buffer), "%02d%c", gotoCoordinateState.decDegrees, 0xB0);
+  drawSegment(4, 40, yDec, 28, buffer);
+  snprintf(buffer, sizeof(buffer), "%02d'", gotoCoordinateState.decArcMinutes);
+  drawSegment(5, 70, yDec, 24, buffer);
+  snprintf(buffer, sizeof(buffer), "%02d\"", gotoCoordinateState.decArcSeconds);
+  drawSegment(6, 98, yDec, 24, buffer);
+
+  int yBack = 48;
+  drawSegment(7, 0, yBack, 40, "Back");
+
+  display.setCursor(0, 60);
+  display.print("Joy=Next Enc=Go/Back");
+}
+
+void enterLocationSetup() {
+  const SystemConfig& config = storage::getConfig();
+  locationEdit.latitudeDeg = config.observerLatitudeDeg;
+  locationEdit.longitudeDeg = config.observerLongitudeDeg;
+  locationEdit.timezoneMinutes = config.timezoneOffsetMinutes;
+  locationEdit.fieldIndex = 0;
+  setUiState(UiState::LocationSetup);
+}
+
 void enterGotoSpeedSetup() {
   const GotoProfile& profile = storage::getConfig().gotoProfile;
   gotoSpeedState.maxSpeed = profile.maxSpeedDegPerSec;
@@ -614,19 +798,204 @@ void handleGotoSpeedInput(int delta) {
   if (input::consumeJoystickPress()) {
     gotoSpeedState.fieldIndex = (gotoSpeedState.fieldIndex + 1) % 3;
   }
-  if (consumeJoystickBackEvent()) {
-    setUiState(UiState::SetupMenu);
-    return;
-  }
   bool select = input::consumeEncoderClick();
-  if (!select) {
-    select = consumeJoystickSelectEvent();
-  }
   if (select) {
     GotoProfile profile{gotoSpeedState.maxSpeed, gotoSpeedState.acceleration, gotoSpeedState.deceleration};
     storage::setGotoProfile(profile);
     showInfo("Goto saved");
     setUiState(UiState::SetupMenu);
+  }
+}
+
+void handleLocationInput(int delta) {
+  if (delta != 0) {
+    switch (locationEdit.fieldIndex) {
+      case 0:
+        locationEdit.latitudeDeg =
+            std::clamp(locationEdit.latitudeDeg + delta * 0.1, -90.0, 90.0);
+        break;
+      case 1:
+        locationEdit.longitudeDeg =
+            std::clamp(locationEdit.longitudeDeg + delta * 0.1, -180.0, 180.0);
+        break;
+      case 2: {
+        int stepMinutes = delta * 15;
+        locationEdit.timezoneMinutes =
+            std::clamp(locationEdit.timezoneMinutes + stepMinutes, -720, 840);
+        break;
+      }
+    }
+  }
+  if (input::consumeJoystickPress()) {
+    locationEdit.fieldIndex = (locationEdit.fieldIndex + 1) % 3;
+  }
+  if (input::consumeEncoderClick()) {
+    storage::setObserverLocation(
+        locationEdit.latitudeDeg, locationEdit.longitudeDeg, locationEdit.timezoneMinutes);
+    showInfo("Location saved");
+    setUiState(UiState::SetupMenu);
+  }
+}
+
+void enterGotoCoordinateEntry() {
+  double ra = manualGotoRaHours;
+  double dec = manualGotoDecDegrees;
+  if (systemState.selectedCatalogIndex >= 0 &&
+      systemState.selectedCatalogIndex < static_cast<int>(catalog::size())) {
+    const CatalogObject* object = catalog::get(static_cast<size_t>(systemState.selectedCatalogIndex));
+    if (object) {
+      ra = object->raHours;
+      dec = object->decDegrees;
+    }
+  } else if (tracking.active) {
+    ra = tracking.targetRaHours;
+    dec = tracking.targetDecDegrees;
+  }
+
+  double normalizedRa = fmod(ra, 24.0);
+  if (normalizedRa < 0.0) normalizedRa += 24.0;
+  int hours = static_cast<int>(floor(normalizedRa));
+  double raMinutesFloat = (normalizedRa - hours) * 60.0;
+  int minutes = static_cast<int>(floor(raMinutesFloat));
+  double raSecondsFloat = (raMinutesFloat - minutes) * 60.0;
+  int seconds = static_cast<int>(llround(raSecondsFloat));
+  if (seconds >= 60) {
+    seconds -= 60;
+    minutes += 1;
+  }
+  if (minutes >= 60) {
+    minutes -= 60;
+    hours = (hours + 1) % 24;
+  }
+
+  bool negative = dec < 0.0;
+  double absDec = fabs(dec);
+  if (absDec > 90.0) absDec = 90.0;
+  int degrees = static_cast<int>(floor(absDec));
+  double decMinutesFloat = (absDec - degrees) * 60.0;
+  int decMinutes = static_cast<int>(floor(decMinutesFloat));
+  double decSecondsFloat = (decMinutesFloat - decMinutes) * 60.0;
+  int decSeconds = static_cast<int>(llround(decSecondsFloat));
+  if (decSeconds >= 60) {
+    decSeconds -= 60;
+    decMinutes += 1;
+  }
+  if (decMinutes >= 60) {
+    decMinutes -= 60;
+    degrees += 1;
+  }
+  if (degrees > 90) {
+    degrees = 90;
+  }
+  if (degrees == 90) {
+    decMinutes = 0;
+    decSeconds = 0;
+  }
+
+  gotoCoordinateState.raHours = hours;
+  gotoCoordinateState.raMinutes = minutes;
+  gotoCoordinateState.raSeconds = seconds;
+  gotoCoordinateState.decNegative = negative;
+  gotoCoordinateState.decDegrees = degrees;
+  gotoCoordinateState.decArcMinutes = decMinutes;
+  gotoCoordinateState.decArcSeconds = decSeconds;
+  gotoCoordinateState.fieldIndex = 0;
+  systemState.menuMode = MenuMode::Goto;
+  setUiState(UiState::GotoCoordinates);
+}
+
+void handleGotoCoordinateInput(int delta) {
+  if (delta != 0) {
+    switch (gotoCoordinateState.fieldIndex) {
+      case 0: {
+        int value = gotoCoordinateState.raHours + delta;
+        value %= 24;
+        if (value < 0) value += 24;
+        gotoCoordinateState.raHours = value;
+        break;
+      }
+      case 1: {
+        int value = gotoCoordinateState.raMinutes + delta;
+        while (value < 0) value += 60;
+        while (value >= 60) value -= 60;
+        gotoCoordinateState.raMinutes = value;
+        break;
+      }
+      case 2: {
+        int value = gotoCoordinateState.raSeconds + delta;
+        while (value < 0) value += 60;
+        while (value >= 60) value -= 60;
+        gotoCoordinateState.raSeconds = value;
+        break;
+      }
+      case 3:
+        gotoCoordinateState.decNegative = !gotoCoordinateState.decNegative;
+        break;
+      case 4: {
+        int value = gotoCoordinateState.decDegrees + delta;
+        value = std::clamp(value, 0, 90);
+        gotoCoordinateState.decDegrees = value;
+        if (value == 90) {
+          gotoCoordinateState.decArcMinutes = 0;
+          gotoCoordinateState.decArcSeconds = 0;
+        }
+        break;
+      }
+      case 5: {
+        int value = gotoCoordinateState.decArcMinutes + delta;
+        while (value < 0) value += 60;
+        while (value >= 60) value -= 60;
+        gotoCoordinateState.decArcMinutes = value;
+        if (gotoCoordinateState.decDegrees == 90) {
+          gotoCoordinateState.decArcMinutes = 0;
+          gotoCoordinateState.decArcSeconds = 0;
+        }
+        break;
+      }
+      case 6: {
+        int value = gotoCoordinateState.decArcSeconds + delta;
+        while (value < 0) value += 60;
+        while (value >= 60) value -= 60;
+        gotoCoordinateState.decArcSeconds = value;
+        if (gotoCoordinateState.decDegrees == 90) {
+          gotoCoordinateState.decArcSeconds = 0;
+        }
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
+  if (input::consumeJoystickPress()) {
+    gotoCoordinateState.fieldIndex = (gotoCoordinateState.fieldIndex + 1) % kGotoCoordinateFieldCount;
+  }
+
+  if (input::consumeEncoderClick()) {
+    if (gotoCoordinateState.fieldIndex == kGotoCoordinateFieldCount - 1) {
+      systemState.menuMode = MenuMode::Status;
+      setUiState(UiState::MainMenu);
+      return;
+    }
+
+    double ra = gotoCoordinateState.raHours + gotoCoordinateState.raMinutes / 60.0 +
+                gotoCoordinateState.raSeconds / 3600.0;
+    ra = fmod(ra, 24.0);
+    if (ra < 0.0) ra += 24.0;
+    double dec = gotoCoordinateState.decDegrees + gotoCoordinateState.decArcMinutes / 60.0 +
+                 gotoCoordinateState.decArcSeconds / 3600.0;
+    if (gotoCoordinateState.decNegative) dec = -dec;
+
+    manualGotoRaHours = ra;
+    manualGotoDecDegrees = dec;
+    String label = makeRaDecLabel(ra, dec);
+    if (startGotoToCoordinates(ra, dec, label)) {
+      selectedObjectName = label;
+      gotoTargetName = label;
+      systemState.selectedCatalogIndex = -1;
+      systemState.menuMode = MenuMode::Status;
+      setUiState(UiState::StatusScreen);
+    }
   }
 }
 
@@ -647,15 +1016,12 @@ void completeBacklashCalibration() {
 }
 
 void handleBacklashCalibrationInput() {
-  if (input::consumeJoystickPress() || consumeJoystickBackEvent()) {
+  if (input::consumeJoystickPress()) {
     setUiState(UiState::SetupMenu);
     showInfo("Cal aborted");
     return;
   }
   bool select = input::consumeEncoderClick();
-  if (!select) {
-    select = consumeJoystickSelectEvent();
-  }
   if (!select) {
     return;
   }
@@ -688,7 +1054,11 @@ void handleBacklashCalibrationInput() {
 
 void render() {
   display.clearDisplay();
-  drawHeader();
+
+  bool showHeader = uiState != UiState::MainMenu;
+  if (showHeader) {
+    drawHeader();
+  }
 
   String message;
   if (fetchInfoMessage(message)) {
@@ -699,8 +1069,11 @@ void render() {
   }
 
   switch (uiState) {
-    case UiState::MainMenu:
+    case UiState::StatusScreen:
       drawStatus();
+      drawStatusMenuPrompt();
+      break;
+    case UiState::MainMenu:
       drawMainMenu();
       break;
     case UiState::PolarAlign:
@@ -718,6 +1091,9 @@ void render() {
     case UiState::SetRtc:
       drawRtcEditor();
       break;
+    case UiState::LocationSetup:
+      drawLocationSetup();
+      break;
     case UiState::CatalogBrowser:
       drawCatalog();
       break;
@@ -726,6 +1102,9 @@ void render() {
       break;
     case UiState::GotoSpeed:
       drawGotoSpeedSetup();
+      break;
+    case UiState::GotoCoordinates:
+      drawGotoCoordinateEntry();
       break;
     case UiState::BacklashCalibration:
       drawBacklashCalibration();
@@ -922,6 +1301,94 @@ bool computeTargetAltAz(const CatalogObject& object,
   return raDecToAltAz(targetTime, raHours, decDegrees, azDeg, altDeg);
 }
 
+bool computeManualTarget(double raHours,
+                         double decDegrees,
+                         const DateTime& start,
+                         double secondsAhead,
+                         double& outRaHours,
+                         double& outDecDegrees,
+                         double& azDeg,
+                         double& altDeg,
+                         DateTime& targetTime) {
+  targetTime = start + TimeSpan(0, 0, 0, static_cast<int32_t>(secondsAhead));
+  outRaHours = raHours;
+  outDecDegrees = decDegrees;
+  return raDecToAltAz(targetTime, raHours, decDegrees, azDeg, altDeg);
+}
+
+template <typename ComputeFn>
+bool planGotoTarget(const String& targetName, int targetCatalogIndex, ComputeFn computeTarget) {
+  const AxisCalibration& cal = storage::getConfig().axisCalibration;
+  if (cal.stepsPerDegreeAz <= 0.0 || cal.stepsPerDegreeAlt <= 0.0) {
+    showInfo("Calibrate axes");
+    return false;
+  }
+
+  if (gotoRuntime.active) {
+    abortGoto();
+  }
+
+  DateTime now = currentDateTime();
+  double currentAz = motion::stepsToAzDegrees(motion::getStepCount(Axis::Az));
+  double currentAlt = motion::stepsToAltDegrees(motion::getStepCount(Axis::Alt));
+
+  double raNow;
+  double decNow;
+  double azNow;
+  double altNow;
+  DateTime timeNow;
+  if (!computeTarget(now, 0.0, raNow, decNow, azNow, altNow, timeNow) || altNow < 0.0) {
+    showInfo("Below horizon");
+    return false;
+  }
+
+  GotoProfileSteps profile = toProfileSteps(storage::getConfig().gotoProfile, cal);
+  double azDiffNow = shortestAngularDistance(currentAz, azNow) * cal.stepsPerDegreeAz;
+  double altDiffNow = (altNow - currentAlt) * cal.stepsPerDegreeAlt;
+  double durationAz =
+      computeTravelTimeSteps(azDiffNow, profile.maxSpeedAz, profile.accelerationAz, profile.decelerationAz);
+  double durationAlt =
+      computeTravelTimeSteps(altDiffNow, profile.maxSpeedAlt, profile.accelerationAlt, profile.decelerationAlt);
+  double estimatedDuration = std::max(durationAz, durationAlt) + 1.0;
+
+  double raFuture;
+  double decFuture;
+  double azFuture;
+  double altFuture;
+  DateTime arrivalTime;
+  if (!computeTarget(now, estimatedDuration, raFuture, decFuture, azFuture, altFuture, arrivalTime) || altFuture < 0.0) {
+    showInfo("Below horizon");
+    return false;
+  }
+
+  int64_t currentAzSteps = motion::getStepCount(Axis::Az);
+  int64_t currentAltSteps = motion::getStepCount(Axis::Alt);
+  int64_t targetAzSteps =
+      currentAzSteps + static_cast<int64_t>(llround(shortestAngularDistance(currentAz, azFuture) * cal.stepsPerDegreeAz));
+  int64_t targetAltSteps =
+      currentAltSteps + static_cast<int64_t>(llround((altFuture - currentAlt) * cal.stepsPerDegreeAlt));
+
+  gotoRuntime.active = true;
+  gotoRuntime.az = initAxisRuntime(Axis::Az, targetAzSteps);
+  gotoRuntime.alt = initAxisRuntime(Axis::Alt, targetAltSteps);
+  gotoRuntime.profile = profile;
+  gotoRuntime.estimatedDurationSec = estimatedDuration;
+  gotoRuntime.lastUpdateMs = millis();
+  gotoRuntime.startTime = now;
+  gotoRuntime.targetRaHours = raFuture;
+  gotoRuntime.targetDecDegrees = decFuture;
+  gotoRuntime.targetCatalogIndex = targetCatalogIndex;
+
+  systemState.gotoActive = true;
+  systemState.azGotoTarget = targetAzSteps;
+  systemState.altGotoTarget = targetAltSteps;
+  gotoTargetName = targetName;
+  motion::clearGotoRates();
+  stopTracking();
+  showInfo("Goto started");
+  return true;
+}
+
 void finalizeTrackingTarget(int catalogIndex,
                             double raHours,
                             double decDegrees,
@@ -1057,72 +1524,29 @@ void updateGoto() {
 }
 
 bool startGotoToObject(const CatalogObject& object, int catalogIndex) {
-  const AxisCalibration& cal = storage::getConfig().axisCalibration;
-  if (cal.stepsPerDegreeAz <= 0.0 || cal.stepsPerDegreeAlt <= 0.0) {
-    showInfo("Calibrate axes");
-    return false;
-  }
+  auto compute = [&](const DateTime& start,
+                     double secondsAhead,
+                     double& raHours,
+                     double& decDegrees,
+                     double& azDeg,
+                     double& altDeg,
+                     DateTime& targetTime) {
+    return computeTargetAltAz(object, start, secondsAhead, raHours, decDegrees, azDeg, altDeg, targetTime);
+  };
+  return planGotoTarget(object.name, catalogIndex, compute);
+}
 
-  if (gotoRuntime.active) {
-    abortGoto();
-  }
-
-  DateTime now = currentDateTime();
-  double currentAz = motion::stepsToAzDegrees(motion::getStepCount(Axis::Az));
-  double currentAlt = motion::stepsToAltDegrees(motion::getStepCount(Axis::Alt));
-
-  double raNow;
-  double decNow;
-  double azNow;
-  double altNow;
-  DateTime timeNow;
-  if (!computeTargetAltAz(object, now, 0.0, raNow, decNow, azNow, altNow, timeNow) || altNow < 0.0) {
-    showInfo("Below horizon");
-    return false;
-  }
-
-  GotoProfileSteps profile = toProfileSteps(storage::getConfig().gotoProfile, cal);
-  double azDiffNow = shortestAngularDistance(currentAz, azNow) * cal.stepsPerDegreeAz;
-  double altDiffNow = (altNow - currentAlt) * cal.stepsPerDegreeAlt;
-  double durationAz = computeTravelTimeSteps(azDiffNow, profile.maxSpeedAz, profile.accelerationAz, profile.decelerationAz);
-  double durationAlt = computeTravelTimeSteps(altDiffNow, profile.maxSpeedAlt, profile.accelerationAlt, profile.decelerationAlt);
-  double estimatedDuration = std::max(durationAz, durationAlt) + 1.0;
-
-  double raFuture;
-  double decFuture;
-  double azFuture;
-  double altFuture;
-  DateTime arrivalTime;
-  if (!computeTargetAltAz(object, now, estimatedDuration, raFuture, decFuture, azFuture, altFuture, arrivalTime) ||
-      altFuture < 0.0) {
-    showInfo("Below horizon");
-    return false;
-  }
-
-  int64_t currentAzSteps = motion::getStepCount(Axis::Az);
-  int64_t currentAltSteps = motion::getStepCount(Axis::Alt);
-  int64_t targetAzSteps = currentAzSteps + static_cast<int64_t>(llround(shortestAngularDistance(currentAz, azFuture) * cal.stepsPerDegreeAz));
-  int64_t targetAltSteps = currentAltSteps + static_cast<int64_t>(llround((altFuture - currentAlt) * cal.stepsPerDegreeAlt));
-
-  gotoRuntime.active = true;
-  gotoRuntime.az = initAxisRuntime(Axis::Az, targetAzSteps);
-  gotoRuntime.alt = initAxisRuntime(Axis::Alt, targetAltSteps);
-  gotoRuntime.profile = profile;
-  gotoRuntime.estimatedDurationSec = estimatedDuration;
-  gotoRuntime.lastUpdateMs = millis();
-  gotoRuntime.startTime = now;
-  gotoRuntime.targetRaHours = raFuture;
-  gotoRuntime.targetDecDegrees = decFuture;
-  gotoRuntime.targetCatalogIndex = catalogIndex;
-
-  systemState.gotoActive = true;
-  systemState.azGotoTarget = targetAzSteps;
-  systemState.altGotoTarget = targetAltSteps;
-  gotoTargetName = object.name;
-  motion::clearGotoRates();
-  stopTracking();
-  showInfo("Goto started");
-  return true;
+bool startGotoToCoordinates(double raHours, double decDegrees, const String& label) {
+  auto compute = [&](const DateTime& start,
+                     double secondsAhead,
+                     double& outRa,
+                     double& outDec,
+                     double& azDeg,
+                     double& altDeg,
+                     DateTime& targetTime) {
+    return computeManualTarget(raHours, decDegrees, start, secondsAhead, outRa, outDec, azDeg, altDeg, targetTime);
+  };
+  return planGotoTarget(label, -1, compute);
 }
 
 void startGotoToSelected() {
@@ -1148,16 +1572,14 @@ void handleMainMenuInput(int delta) {
     while (mainMenuIndex < 0) mainMenuIndex += static_cast<int>(kMainMenuCount);
     while (mainMenuIndex >= static_cast<int>(kMainMenuCount)) mainMenuIndex -= static_cast<int>(kMainMenuCount);
   }
-  consumeJoystickBackEvent();
   bool select = input::consumeEncoderClick();
-  if (!select) {
-    select = consumeJoystickSelectEvent();
-  }
   if (!select) {
     return;
   }
   switch (mainMenuIndex) {
     case 0:
+      systemState.menuMode = MenuMode::Status;
+      setUiState(UiState::StatusScreen);
       showInfo("Status ready", 1500);
       break;
     case 1:
@@ -1196,6 +1618,9 @@ void handleMainMenuInput(int delta) {
       startGotoToSelected();
       break;
     case 6:
+      enterGotoCoordinateEntry();
+      break;
+    case 7:
       enterSetupMenu();
       break;
     default:
@@ -1210,14 +1635,7 @@ void handleSetupMenuInput(int delta) {
     while (setupMenuIndex >= static_cast<int>(kSetupMenuCount))
       setupMenuIndex -= static_cast<int>(kSetupMenuCount);
   }
-  if (consumeJoystickBackEvent()) {
-    setUiState(UiState::MainMenu);
-    return;
-  }
   bool select = input::consumeEncoderClick();
-  if (!select) {
-    select = consumeJoystickSelectEvent();
-  }
   if (!select) {
     return;
   }
@@ -1226,19 +1644,22 @@ void handleSetupMenuInput(int delta) {
       enterRtcEditor();
       break;
     case 1:
-      startJoystickCalibrationFlow();
+      enterLocationSetup();
       break;
     case 2:
+      startJoystickCalibrationFlow();
+      break;
+    case 3:
       resetAxisCalibrationState();
       showInfo("Set Az 0");
       break;
-    case 3:
+    case 4:
       enterGotoSpeedSetup();
       break;
-    case 4:
+    case 5:
       startBacklashCalibration();
       break;
-    case 5:
+    case 6:
       setUiState(UiState::MainMenu);
       break;
     default:
@@ -1276,14 +1697,7 @@ void handleRtcInput(int delta) {
   if (input::consumeJoystickPress()) {
     rtcEdit.fieldIndex = (rtcEdit.fieldIndex + 1) % 6;
   }
-  if (consumeJoystickBackEvent()) {
-    setUiState(UiState::SetupMenu);
-    return;
-  }
   bool select = input::consumeEncoderClick();
-  if (!select) {
-    select = consumeJoystickSelectEvent();
-  }
   if (select) {
     applyRtcEdit();
   }
@@ -1294,12 +1708,6 @@ void handleCatalogInput(int delta) {
     bool exit = input::consumeEncoderClick();
     if (!exit) {
       exit = input::consumeJoystickPress();
-    }
-    if (!exit) {
-      exit = consumeJoystickSelectEvent();
-    }
-    if (!exit) {
-      exit = consumeJoystickBackEvent();
     }
     if (exit) {
       setUiState(UiState::MainMenu);
@@ -1312,14 +1720,7 @@ void handleCatalogInput(int delta) {
     while (catalogIndex < 0) catalogIndex += total;
     while (catalogIndex >= total) catalogIndex -= total;
   }
-  if (consumeJoystickBackEvent()) {
-    setUiState(UiState::MainMenu);
-    return;
-  }
   bool select = input::consumeEncoderClick();
-  if (!select) {
-    select = consumeJoystickSelectEvent();
-  }
   if (select) {
     systemState.selectedCatalogIndex = catalogIndex;
     const CatalogObject* object = catalog::get(static_cast<size_t>(catalogIndex));
@@ -1337,15 +1738,12 @@ void handleCatalogInput(int delta) {
 
 void handlePolarAlignInput() {
   bool select = input::consumeEncoderClick();
-  if (!select) {
-    select = consumeJoystickSelectEvent();
-  }
   if (select) {
     completePolarAlignment();
   }
-  if (input::consumeJoystickPress() || consumeJoystickBackEvent()) {
+  if (input::consumeJoystickPress()) {
     systemState.menuMode = MenuMode::Status;
-    setUiState(UiState::MainMenu);
+    setUiState(UiState::StatusScreen);
     showInfo("Align aborted");
   }
 }
@@ -1415,50 +1813,21 @@ void startTask() {
   xTaskCreatePinnedToCore(displayTask, "display", 4096, nullptr, 1, nullptr, 0);
 }
 
+void handleStatusScreenInput() {
+  if (input::consumeEncoderClick()) {
+    mainMenuIndex = 0;
+    setUiState(UiState::MainMenu);
+  }
+}
+
 void handleInput() {
   input::update();
   int delta = input::consumeEncoderDelta();
-  float joyY = input::getJoystickNormalizedY();
-  float joyX = input::getJoystickNormalizedX();
-  uint32_t nowMs = millis();
-  if (lastScrollUpdateMs == 0) {
-    lastScrollUpdateMs = nowMs;
-  }
-  float dt = (nowMs - lastScrollUpdateMs) / 1000.0f;
-  lastScrollUpdateMs = nowMs;
-  constexpr float kItemsPerSecond = 6.0f;
-  joystickScrollAccumulator += joyY * kItemsPerSecond * dt;
-  int joystickSteps = 0;
-  while (joystickScrollAccumulator >= 1.0f) {
-    joystickSteps += 1;
-    joystickScrollAccumulator -= 1.0f;
-  }
-  while (joystickScrollAccumulator <= -1.0f) {
-    joystickSteps -= 1;
-    joystickScrollAccumulator += 1.0f;
-  }
-  delta += joystickSteps;
 
-  constexpr float kHorizontalThreshold = 0.6f;
-  bool rightActive = joyX > kHorizontalThreshold;
-  bool leftActive = joyX < -kHorizontalThreshold;
-  if (rightActive) {
-    if (!joystickRightLatched) {
-      joystickRightLatched = true;
-      joystickSelectEvent = true;
-    }
-  } else {
-    joystickRightLatched = false;
-  }
-  if (leftActive) {
-    if (!joystickLeftLatched) {
-      joystickLeftLatched = true;
-      joystickBackEvent = true;
-    }
-  } else {
-    joystickLeftLatched = false;
-  }
   switch (uiState) {
+    case UiState::StatusScreen:
+      handleStatusScreenInput();
+      break;
     case UiState::MainMenu:
       handleMainMenuInput(delta);
       break;
@@ -1471,18 +1840,18 @@ void handleInput() {
     case UiState::SetRtc:
       handleRtcInput(delta);
       break;
+    case UiState::LocationSetup:
+      handleLocationInput(delta);
+      break;
     case UiState::CatalogBrowser:
       handleCatalogInput(delta);
       break;
     case UiState::AxisCalibration: {
-      if (consumeJoystickBackEvent() || input::consumeJoystickPress()) {
+      if (input::consumeJoystickPress()) {
         setUiState(UiState::SetupMenu);
         break;
       }
       bool select = input::consumeEncoderClick();
-      if (!select) {
-        select = consumeJoystickSelectEvent();
-      }
       if (select) {
         handleAxisCalibrationClick();
       }
@@ -1490,6 +1859,9 @@ void handleInput() {
     }
     case UiState::GotoSpeed:
       handleGotoSpeedInput(delta);
+      break;
+    case UiState::GotoCoordinates:
+      handleGotoCoordinateInput(delta);
       break;
     case UiState::BacklashCalibration:
       handleBacklashCalibrationInput();
@@ -1519,7 +1891,7 @@ void completePolarAlignment() {
     motion::setStepCount(Axis::Alt, motion::altDegreesToSteps(altDeg));
   }
   storage::setPolarAligned(true);
-  setUiState(UiState::MainMenu);
+  setUiState(UiState::StatusScreen);
   showInfo("Polaris locked");
 }
 
