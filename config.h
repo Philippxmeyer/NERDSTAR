@@ -33,7 +33,7 @@ constexpr uint8_t SDA_PIN = 21;
 constexpr uint8_t SCL_PIN = 22;
 
 // SD card chip select
-constexpr uint8_t SD_CS_PIN = 5;
+constexpr uint8_t SD_CS_PIN = 15;
 
 // SD card initialization behavior
 constexpr uint32_t SD_INIT_TIMEOUT_MS = 1500;
