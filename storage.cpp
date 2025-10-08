@@ -1,5 +1,6 @@
 #include "storage.h"
 
+#include <Arduino.h>
 #include <EEPROM.h>
 #include <SD.h>
 #include <SPI.h>
@@ -89,7 +90,17 @@ bool init() {
     }
   }
 
-  sdAvailable = SD.begin(config::SD_CS_PIN);
+  const uint32_t start = millis();
+  do {
+    sdAvailable = SD.begin(config::SD_CS_PIN);
+    if (sdAvailable) {
+      break;
+    }
+    if (millis() - start >= config::SD_INIT_TIMEOUT_MS) {
+      break;
+    }
+    delay(config::SD_INIT_RETRY_DELAY_MS);
+  } while (true);
   return sdAvailable;
 }
 

@@ -35,6 +35,10 @@ constexpr uint8_t SCL_PIN = 22;
 // SD card chip select
 constexpr uint8_t SD_CS_PIN = 5;
 
+// SD card initialization behavior
+constexpr uint32_t SD_INIT_TIMEOUT_MS = 1500;
+constexpr uint16_t SD_INIT_RETRY_DELAY_MS = 100;
+
 // Driver configuration
 constexpr float R_SENSE = 0.11f;
 constexpr uint8_t DRIVER_ADDR_RA = 0b00;
