@@ -31,10 +31,16 @@ void IRAM_ATTR handleEncoderPinA() {
   int b = digitalRead(config::ROT_B);
   if (a == b) {
     encoderTicks++;
-  } else {
+  } else if (encoderSubSteps <= -kEncoderStepsPerNotch) {
+    encoderSubSteps += kEncoderStepsPerNotch;
     encoderTicks--;
   }
+
   portEXIT_CRITICAL_ISR(&encoderMux);
+}
+
+void IRAM_ATTR handleEncoderPinA() {
+  handleEncoderEdge();
 }
 
 void IRAM_ATTR handleEncoderPinB() {
@@ -80,6 +86,14 @@ void init() {
   pinMode(config::ROT_A, INPUT_PULLUP);
   pinMode(config::ROT_B, INPUT_PULLUP);
   pinMode(config::ROT_BTN, INPUT_PULLUP);
+
+  portENTER_CRITICAL(&encoderMux);
+  bool levelA = digitalRead(config::ROT_A) == HIGH;
+  bool levelB = digitalRead(config::ROT_B) == HIGH;
+  encoderState = static_cast<uint8_t>(((levelA ? 1u : 0u) << 1) | (levelB ? 1u : 0u));
+  encoderSubSteps = 0;
+  encoderTicks = 0;
+  portEXIT_CRITICAL(&encoderMux);
 
   attachInterrupt(digitalPinToInterrupt(config::ROT_A), handleEncoderPinA, CHANGE);
   attachInterrupt(digitalPinToInterrupt(config::ROT_B), handleEncoderPinB, CHANGE);
