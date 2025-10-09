@@ -1,5 +1,7 @@
 #include "display_menu.h"
 
+#if defined(DEVICE_ROLE_HID)
+
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <RTClib.h>
@@ -1761,7 +1763,8 @@ void stopTracking() {
 void init() {
   Wire.begin(config::SDA_PIN, config::SCL_PIN);
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-    Serial.println("OLED init failed");
+    // OLED init failure will be reported via on-screen message; avoid serial
+    // output because the primary UART is reserved for the inter-board link.
   }
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
@@ -1908,4 +1911,6 @@ void startPolarAlignment() {
 void update() { updateGoto(); }
 
 }  // namespace display_menu
+
+#endif  // DEVICE_ROLE_HID
 

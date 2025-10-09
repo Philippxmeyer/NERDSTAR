@@ -32,7 +32,8 @@ und ein Hauch Größenwahn ergeben zusammen ein
 | 🔧 **Setup & Kalibrierung**   | Menü für RTC-Zeit, Joystick-Zentrum, Achsenkalibrierung & EEPROM-Speicher   |
 | 📺 **OLED Status Display**    | Zeigt RA/Dec, Tracking-/Goto-Status und gewähltes Ziel                      |
 | ⚙️ **µs-Timersteuerung**      | Stepper laufen so gleichmäßig, dass man sie fast atmen hört                |
-| 🧠 **ESP32 Dual-Core**        | Core 1 = Stepper / Core 0 = Display – keine Ruckler, keine Kompromisse       |
+| 🧠 **ESP32 Dual-Core**        | Hauptrechner: Core 1 steuert die Motoren, Core 0 berechnet Kurs & Protokoll |
+| 🔌 **Zwei ESP32**             | Zweiter ESP32 kümmert sich ausschließlich um HID (Display, Joystick, SD)     |
 
 ---
 
@@ -51,7 +52,8 @@ und irgendwann sagen: „Lauf, kleiner ESP, lauf mit den Sternen.“
 
 | Komponente             | Aufgabe                             | Pins                                  |
 | ---------------------- | ----------------------------------- | ------------------------------------- |
-| **ESP32**              | Gehirn                              | –                                     |
+| **ESP32 (Hauptrechner)** | Kursberechnung + Motorsteuerung      | UART0 TX 1 / RX 3 → HID-Link         |
+| **ESP32 (HID)**        | Display, Eingaben, SD                | UART0 TX 1 / RX 3 → Hauptrechner     |
 | **TMC2209 (RA)**       | Dreht um die Rektaszensions-Achse   | STEP 25, DIR 26, EN 27, RX/TX = 16/17 |
 | **TMC2209 (DEC)**      | Dreht um die Deklinations-Achse     | STEP 13, DIR 12, EN 14, RX/TX = 4/5   |
 | **OLED (SSD1306)**     | Zeigt alles an, außer Mitleid       | I²C: SDA 21, SCL 22                   |
@@ -70,7 +72,9 @@ NERDSTAR/
 ├── catalog.cpp/.h         # SD-Objektbibliothek & Parser
 ├── display_menu.cpp/.h    # OLED-Menüs, Setup, Goto, Polar Align
 ├── input.cpp/.h           # Joystick + Encoder Handling
-├── motion.cpp/.h          # Stepper-Steuerung, Tracking, Kalibrierung
+├── motion_main.cpp/.h     # Stepper-Steuerung & Kursberechnung (Hauptrechner)
+├── motion_hid.cpp         # RPC-Proxy für Motion-Funktionen (HID)
+├── comm.cpp/.h            # UART-Protokoll zwischen Hauptrechner und HID
 ├── planets.cpp/.h         # Schlanke Planeten-Ephemeriden
 ├── storage.cpp/.h         # EEPROM & SD Initialisierung
 ├── config.h               # Pinout & Konstanten
@@ -81,6 +85,21 @@ NERDSTAR/
 ├── LICENSE
 └── README.md
 ```
+
+---
+
+### Firmware-Varianten
+
+- **HID-Firmware (Standard)**: Ohne zusätzliche Defines kompilieren. Baut das
+  UI für Display, Joystick, SD und spricht den Hauptrechner per UART an.
+- **Hauptrechner-Firmware**: In den Compiler-Optionen `DEVICE_ROLE_MAIN`
+  definieren (z.B. `-DDEVICE_ROLE_MAIN`). Der Code initialisiert die
+  Schrittmotoren, startet zwei Tasks (Core 0 = Kursberechnung & Protokoll,
+  Core 1 = Motorsteuerung) und beantwortet alle Motion-RPCs.
+
+Beide Varianten verwenden UART0 (Pins **TX1**, **RX3**) als galvanische
+Verbindung. Der USB-Seriell-Port des ESP32 steht dadurch nicht gleichzeitig
+zur Verfügung.
 
 ---
 
@@ -136,9 +155,11 @@ Kurz gesagt: Der ESP32 weiß, wohin es geht, und bleibt dank Tracking dort.
 1. Arduino IDE öffnen
 2. Board: **ESP32 Dev Module**
 3. Bibliotheken installieren (siehe oben)
-4. `NERDSTAR.ino` hochladen
-5. Kaffee holen
-6. Freuen, dass du was gebaut hast, das klingt wie ein NASA-Projekt und aussieht wie ein Nerd-Traum.
+4. **HID-ESP32** flashen (ohne zusätzliche Build-Flags)
+5. **Hauptrechner-ESP32** flashen (Build-Flag `-DDEVICE_ROLE_MAIN` setzen)
+6. Beide Boards über TX1/RX3 kreuzen, GND verbinden
+7. Kaffee holen
+8. Freuen, dass du was gebaut hast, das klingt wie ein NASA-Projekt und aussieht wie ein Nerd-Traum.
 
 ---
 

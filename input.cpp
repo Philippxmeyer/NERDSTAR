@@ -1,5 +1,7 @@
 #include "input.h"
 
+#if defined(DEVICE_ROLE_HID)
+
 #include <math.h>
 
 #include "config.h"
@@ -141,5 +143,7 @@ void setJoystickCalibration(const JoystickCalibration& calibration) {
   currentCalibration = calibration;
 }
 
-} // namespace input
+}  // namespace input
+
+#endif  // DEVICE_ROLE_HID
 
