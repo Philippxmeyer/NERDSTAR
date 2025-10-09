@@ -3,6 +3,8 @@
 #include <SD.h>
 #include <vector>
 
+#include "text_utils.h"
+
 namespace {
 
 std::vector<CatalogObject> catalogObjects;
@@ -41,8 +43,8 @@ bool parseObjectElement(const String& line, CatalogObject& object) {
     return false;
   }
 
-  object.name = name;
-  object.type = type;
+  object.name = sanitizeForDisplay(name);
+  object.type = sanitizeForDisplay(type);
   object.raHours = ra.toFloat();
   object.decDegrees = dec.toFloat();
   object.magnitude = mag.toFloat();
@@ -94,8 +96,9 @@ const CatalogObject* get(size_t index) {
 }
 
 const CatalogObject* findByName(const String& name) {
+  String sanitized = sanitizeForDisplay(name);
   for (auto& obj : catalogObjects) {
-    if (obj.name.equalsIgnoreCase(name)) {
+    if (obj.name.equalsIgnoreCase(sanitized)) {
       return &obj;
     }
   }

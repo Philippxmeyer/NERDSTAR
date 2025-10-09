@@ -10,33 +10,47 @@ namespace {
 
 portMUX_TYPE encoderMux = portMUX_INITIALIZER_UNLOCKED;
 volatile int encoderTicks = 0;
+volatile uint8_t encoderState = 0;
+volatile int8_t encoderStepAccumulator = 0;
 volatile bool encoderClick = false;
 volatile bool joystickClick = false;
 
 JoystickCalibration currentCalibration{2048, 2048};
 bool lastJoystickState = false;
 
+constexpr int8_t kQuadratureTable[16] = {
+    0,  -1, 1,  0,   // 00 -> 00/01/10/11
+    1,  0,  0,  -1,  // 01 -> 00/01/10/11
+    -1, 0,  0,  1,   // 10 -> 00/01/10/11
+    0,  1,  -1, 0};  // 11 -> 00/01/10/11
+
+void IRAM_ATTR updateEncoderState() {
+  uint8_t a = static_cast<uint8_t>(digitalRead(config::ROT_A));
+  uint8_t b = static_cast<uint8_t>(digitalRead(config::ROT_B));
+  uint8_t current = static_cast<uint8_t>((a << 1) | b);
+  uint8_t previous = encoderState & 0x03;
+  uint8_t index = static_cast<uint8_t>((previous << 2) | current);
+  encoderState = current;
+  int8_t movement = kQuadratureTable[index];
+  encoderStepAccumulator += movement;
+  if (encoderStepAccumulator >= 4) {
+    encoderTicks++;
+    encoderStepAccumulator = 0;
+  } else if (encoderStepAccumulator <= -4) {
+    encoderTicks--;
+    encoderStepAccumulator = 0;
+  }
+}
+
 void IRAM_ATTR handleEncoderPinA() {
   portENTER_CRITICAL_ISR(&encoderMux);
-  int a = digitalRead(config::ROT_A);
-  int b = digitalRead(config::ROT_B);
-  if (a == b) {
-    encoderTicks++;
-  } else {
-    encoderTicks--;
-  }
+  updateEncoderState();
   portEXIT_CRITICAL_ISR(&encoderMux);
 }
 
 void IRAM_ATTR handleEncoderPinB() {
   portENTER_CRITICAL_ISR(&encoderMux);
-  int a = digitalRead(config::ROT_A);
-  int b = digitalRead(config::ROT_B);
-  if (a != b) {
-    encoderTicks++;
-  } else {
-    encoderTicks--;
-  }
+  updateEncoderState();
   portEXIT_CRITICAL_ISR(&encoderMux);
 }
 
@@ -63,6 +77,10 @@ void init() {
   pinMode(config::ROT_A, INPUT_PULLUP);
   pinMode(config::ROT_B, INPUT_PULLUP);
   pinMode(config::ROT_BTN, INPUT_PULLUP);
+
+  encoderState = static_cast<uint8_t>((digitalRead(config::ROT_A) << 1) |
+                                      digitalRead(config::ROT_B));
+  encoderStepAccumulator = 0;
 
   attachInterrupt(digitalPinToInterrupt(config::ROT_A), handleEncoderPinA, CHANGE);
   attachInterrupt(digitalPinToInterrupt(config::ROT_B), handleEncoderPinB, CHANGE);
