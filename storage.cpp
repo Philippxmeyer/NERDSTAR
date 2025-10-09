@@ -90,9 +90,13 @@ bool init() {
     }
   }
 
+  pinMode(config::SD_CS_PIN, OUTPUT);
+  digitalWrite(config::SD_CS_PIN, HIGH);
+  SPI.begin(config::SD_SCK_PIN, config::SD_MISO_PIN, config::SD_MOSI_PIN, config::SD_CS_PIN);
+
   const uint32_t start = millis();
   do {
-    sdAvailable = SD.begin(config::SD_CS_PIN);
+    sdAvailable = SD.begin(config::SD_CS_PIN, SPI, config::SD_SPI_FREQUENCY_HZ);
     if (sdAvailable) {
       break;
     }
