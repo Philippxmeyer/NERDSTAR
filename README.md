@@ -50,16 +50,59 @@ und irgendwann sagen: „Lauf, kleiner ESP, lauf mit den Sternen.“
 
 ## ⚙️ Hardwareübersicht
 
-| Komponente             | Aufgabe                             | Pins                                  |
+| Komponente             | Aufgabe                             | Pins / Anschlüsse                     |
 | ---------------------- | ----------------------------------- | ------------------------------------- |
-| **ESP32 (Hauptrechner)** | Kursberechnung + Motorsteuerung      | UART0 TX 1 / RX 3 → HID-Link         |
-| **ESP32 (HID)**        | Display, Eingaben, SD                | UART0 TX 1 / RX 3 → Hauptrechner     |
-| **TMC2209 (RA)**       | Dreht um die Rektaszensions-Achse   | STEP 25, DIR 26, EN 27, RX/TX = 16/17 |
-| **TMC2209 (DEC)**      | Dreht um die Deklinations-Achse     | STEP 13, DIR 12, EN 14, RX/TX = 4/5   |
-| **OLED (SSD1306)**     | Zeigt alles an, außer Mitleid       | I²C: SDA 21, SCL 22                   |
-| **RTC (DS3231)**       | Sagt dir, wann du’s verpasst hast   | I²C: SDA 21, SCL 22                   |
-| **Joystick (KY-023)**  | Steuert alles intuitiv falsch herum | VRx 34, VRy 35, SW 32                 |
-| **SD-Karte**           | Bibliothek mit Lieblingsobjekten    | CS 15, SPI laut Board                 |
+| **ESP32 (Hauptrechner)** | Kursberechnung + Motorsteuerung      | UART0 TX (1) ↔ HID-RX, UART0 RX (3) ↔ HID-TX |
+| **ESP32 (HID)**        | Display, Eingaben, SD                | UART0 TX (1) ↔ Main-RX, UART0 RX (3) ↔ Main-TX |
+| **TMC2209 (RA)**       | Dreht um die Rektaszensions-Achse   | STEP 25, DIR 26, EN 27, UART TX/RX = 17/16 |
+| **TMC2209 (DEC)**      | Dreht um die Deklinations-Achse     | STEP 13, DIR 12, EN 14, UART TX/RX = 5/4 |
+| **OLED (SSD1306)**     | Zeigt alles an, außer Mitleid       | I²C: SDA 21, SCL 22 (HID-ESP32)       |
+| **RTC (DS3231)**       | Sagt dir, wann du’s verpasst hast   | I²C: SDA 21, SCL 22 (HID-ESP32)       |
+| **Joystick (KY-023)**  | Steuert alles intuitiv falsch herum | VRx 34, VRy 35, SW 32 (HID-ESP32)     |
+| **Rotary-Encoder**     | Menü & Bestätigungen                | A = 23, B = 19, Button = 18 (HID-ESP32) |
+| **SD-Karte (VSPI)**    | Bibliothek mit Lieblingsobjekten    | CS 15, MOSI 23, MISO 19, SCK 18 (HID-ESP32) |
+
+### 🔌 Verkabelung im Detail
+
+#### Hauptrechner-ESP32 → Motortreiber
+
+| Signal                   | Pin am ESP32 (Main) | Anschluss am TMC2209 (RA) | Anschluss am TMC2209 (DEC) |
+| ------------------------ | ------------------- | ------------------------- | -------------------------- |
+| Enable                   | 27                  | EN                        | EN                         |
+| Richtung (DIR)           | 26                  | DIR                       | –                          |
+| Schritt (STEP)           | 25                  | STEP                      | –                          |
+| Richtung (DIR)           | 12                  | –                         | DIR                        |
+| Schritt (STEP)           | 13                  | –                         | STEP                       |
+| Treiber-UART TX          | 17                  | PDN/UART                  | –                          |
+| Treiber-UART RX          | 16                  | PDN/UART                  | –                          |
+| Treiber-UART TX          | 5                   | –                         | PDN/UART                   |
+| Treiber-UART RX          | 4                   | –                         | PDN/UART                   |
+| Versorgung & Masse       | 5 V / GND           | VM / GND                  | VM / GND                   |
+
+> Hinweis: Beide TMC2209 teilen sich die Versorgung, die UART-Leitungen sind getrennt. TX und RX bitte jeweils an den PDN/UART-Pin laut Modulbelegung anschließen.
+
+#### HID-ESP32 → Benutzerschnittstellen
+
+| Gerät / Signal                  | Pin am ESP32 (HID) | Bemerkung |
+| -------------------------------- | ------------------ | --------- |
+| OLED + RTC SDA                   | 21                 | Gemeinsamer I²C-Bus |
+| OLED + RTC SCL                   | 22                 | Gemeinsamer I²C-Bus |
+| SD-Karte CS                      | 15                 | Weitere SPI-Leitungen VSPI-Default (MOSI 23, MISO 19, SCK 18) |
+| Rotary-Encoder A                 | 23                 | Achtung: teilt sich Leitung mit SPI-MOSI → Pullups nahe am Encoder verwenden |
+| Rotary-Encoder B                 | 19                 | Teilt sich Leitung mit SPI-MISO |
+| Rotary-Encoder Button            | 18                 | Ebenfalls SPI-SCK-Leitung, wird intern entprellt |
+| Joystick X (VRx)                 | 34                 | ADC, high impedance |
+| Joystick Y (VRy)                 | 35                 | ADC |
+| Joystick Button                  | 32                 | LOW-aktiv |
+| Gemeinsame Versorgung für HID    | 3.3 V / GND        | Alle Sensoren/Bedienelemente |
+
+#### Verbindung zwischen den beiden ESP32
+
+- **TX ↔ RX kreuzen:** Main-TX (GPIO 1) → HID-RX (GPIO 3) und Main-RX (GPIO 3) ← HID-TX (GPIO 1)
+- **GND verbinden:** Gemeinsamer Bezugspunkt für UART und Sensoren
+- Optional: **5 V / 3.3 V** gemeinsam einspeisen, wenn beide Boards aus derselben Quelle versorgt werden
+
+Diese Belegung entspricht exakt den Konstanten in [`config.h`](config.h) und stellt sicher, dass jede Komponente am richtigen Controller hängt.
 
 ---
 
