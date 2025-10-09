@@ -10,12 +10,23 @@ portMUX_TYPE encoderMux = portMUX_INITIALIZER_UNLOCKED;
 volatile int encoderTicks = 0;
 volatile bool encoderClick = false;
 volatile bool joystickClick = false;
+volatile uint32_t lastEncoderEdgeUs = 0;
+
+constexpr uint32_t ENCODER_DEBOUNCE_US = 300;
 
 JoystickCalibration currentCalibration{2048, 2048};
 bool lastJoystickState = false;
 
 void IRAM_ATTR handleEncoderPinA() {
+  const uint32_t now = micros();
+
   portENTER_CRITICAL_ISR(&encoderMux);
+  if (now - lastEncoderEdgeUs < ENCODER_DEBOUNCE_US) {
+    portEXIT_CRITICAL_ISR(&encoderMux);
+    return;
+  }
+  lastEncoderEdgeUs = now;
+
   int a = digitalRead(config::ROT_A);
   int b = digitalRead(config::ROT_B);
   if (a == b) {
@@ -27,7 +38,15 @@ void IRAM_ATTR handleEncoderPinA() {
 }
 
 void IRAM_ATTR handleEncoderPinB() {
+  const uint32_t now = micros();
+
   portENTER_CRITICAL_ISR(&encoderMux);
+  if (now - lastEncoderEdgeUs < ENCODER_DEBOUNCE_US) {
+    portEXIT_CRITICAL_ISR(&encoderMux);
+    return;
+  }
+  lastEncoderEdgeUs = now;
+
   int a = digitalRead(config::ROT_A);
   int b = digitalRead(config::ROT_B);
   if (a != b) {
