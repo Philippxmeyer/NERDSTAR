@@ -2,10 +2,18 @@
 
 #include <algorithm>
 
+#if defined(DEVICE_ROLE_HID)
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#endif
+
 namespace {
 
 HardwareSerial& link = Serial;
 uint16_t nextRequestId = 1;
+#if defined(DEVICE_ROLE_HID)
+SemaphoreHandle_t rpcMutex = nullptr;
+#endif
 
 bool readLine(String& line, uint32_t timeoutMs) {
   line = "";
@@ -54,6 +62,11 @@ void initLink() {
   link.begin(config::COMM_BAUDRATE, SERIAL_8N1, config::COMM_RX_PIN,
              config::COMM_TX_PIN);
   link.flush();
+#if defined(DEVICE_ROLE_HID)
+  if (rpcMutex == nullptr) {
+    rpcMutex = xSemaphoreCreateMutex();
+  }
+#endif
 }
 
 #if defined(DEVICE_ROLE_HID)
@@ -81,6 +94,30 @@ bool waitForReady(uint32_t timeoutMs) {
 
 bool call(const char* command, std::initializer_list<String> params,
           std::vector<String>* payload, String* error, uint32_t timeoutMs) {
+  class MutexLock {
+   public:
+    explicit MutexLock(SemaphoreHandle_t handle) : handle_(handle), locked_(false) {
+      if (handle_) {
+        locked_ = xSemaphoreTake(handle_, portMAX_DELAY) == pdTRUE;
+      }
+    }
+    ~MutexLock() {
+      if (locked_ && handle_) {
+        xSemaphoreGive(handle_);
+      }
+    }
+    bool locked() const { return locked_; }
+
+   private:
+    SemaphoreHandle_t handle_;
+    bool locked_;
+  } lock(rpcMutex);
+  if (!lock.locked()) {
+    if (error) {
+      *error = "Mutex";
+    }
+    return false;
+  }
   if (payload) {
     payload->clear();
   }
