@@ -10,47 +10,26 @@ portMUX_TYPE encoderMux = portMUX_INITIALIZER_UNLOCKED;
 volatile int encoderTicks = 0;
 volatile bool encoderClick = false;
 volatile bool joystickClick = false;
-volatile uint8_t encoderState = 0;
-volatile int encoderSubSteps = 0;
+volatile uint32_t lastEncoderEdgeUs = 0;
 
-constexpr int8_t kQuadratureTransitionTable[16] = {
-    0,  -1, +1, 0,  // 00 -> {00,01,10,11}
-    +1, 0,  0, -1,  // 01 -> {00,01,10,11}
-    -1, 0,  0, +1,  // 10 -> {00,01,10,11}
-    0,  +1, -1, 0   // 11 -> {00,01,10,11}
-};
-
-constexpr int kEncoderStepsPerNotch = 4;
+constexpr uint32_t ENCODER_DEBOUNCE_US = 300;
 
 JoystickCalibration currentCalibration{2048, 2048};
 bool lastJoystickState = false;
 
-void IRAM_ATTR handleEncoderEdge() {
-  bool levelA = digitalRead(config::ROT_A) == HIGH;
-  bool levelB = digitalRead(config::ROT_B) == HIGH;
-
-  uint8_t state = static_cast<uint8_t>(((levelA ? 1u : 0u) << 1) | (levelB ? 1u : 0u));
+void IRAM_ATTR handleEncoderPinA() {
+  const uint32_t now = micros();
 
   portENTER_CRITICAL_ISR(&encoderMux);
-
-  uint8_t previousState = encoderState;
-  if (state == previousState) {
+  if (now - lastEncoderEdgeUs < ENCODER_DEBOUNCE_US) {
     portEXIT_CRITICAL_ISR(&encoderMux);
     return;
   }
+  lastEncoderEdgeUs = now;
 
-  encoderState = state;
-
-  int8_t delta = kQuadratureTransitionTable[(previousState << 2) | state];
-  if (delta == 0) {
-    portEXIT_CRITICAL_ISR(&encoderMux);
-    return;
-  }
-
-  encoderSubSteps += delta;
-
-  if (encoderSubSteps >= kEncoderStepsPerNotch) {
-    encoderSubSteps -= kEncoderStepsPerNotch;
+  int a = digitalRead(config::ROT_A);
+  int b = digitalRead(config::ROT_B);
+  if (a == b) {
     encoderTicks++;
   } else if (encoderSubSteps <= -kEncoderStepsPerNotch) {
     encoderSubSteps += kEncoderStepsPerNotch;
@@ -65,7 +44,23 @@ void IRAM_ATTR handleEncoderPinA() {
 }
 
 void IRAM_ATTR handleEncoderPinB() {
-  handleEncoderEdge();
+  const uint32_t now = micros();
+
+  portENTER_CRITICAL_ISR(&encoderMux);
+  if (now - lastEncoderEdgeUs < ENCODER_DEBOUNCE_US) {
+    portEXIT_CRITICAL_ISR(&encoderMux);
+    return;
+  }
+  lastEncoderEdgeUs = now;
+
+  int a = digitalRead(config::ROT_A);
+  int b = digitalRead(config::ROT_B);
+  if (a != b) {
+    encoderTicks++;
+  } else {
+    encoderTicks--;
+  }
+  portEXIT_CRITICAL_ISR(&encoderMux);
 }
 
 void IRAM_ATTR handleEncoderButton() {
