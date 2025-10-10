@@ -1,5 +1,7 @@
 #include "display_menu.h"
 
+#if defined(DEVICE_ROLE_HID)
+
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <RTClib.h>
@@ -16,6 +18,7 @@
 #include "planets.h"
 #include "state.h"
 #include "storage.h"
+#include "text_utils.h"
 
 namespace display_menu {
 namespace {
@@ -52,6 +55,7 @@ struct RtcEditState {
 };
 
 RtcEditState rtcEdit{2024, 1, 1, 0, 0, 0, 0};
+constexpr int kRtcFieldCount = 7;
 
 struct AxisCalibrationState {
   int step;
@@ -159,6 +163,9 @@ LocationEditState locationEdit{0.0, 0.0, 60, 0};
 GotoCoordinateState gotoCoordinateState{0, 0, 0, false, 0, 0, 0, 0};
 double manualGotoRaHours = 0.0;
 double manualGotoDecDegrees = 0.0;
+constexpr int kLocationFieldCount = 4;
+
+constexpr int kGotoSpeedFieldCount = 4;
 
 String selectedObjectName;
 String gotoTargetName;
@@ -241,7 +248,7 @@ void formatDec(double degrees, char* buffer, size_t length) {
     m -= 60;
     d += 1;
   }
-  snprintf(buffer, length, "%c%02d%c %02d' %02d\"", sign, d, 0xB0, m, s);
+  snprintf(buffer, length, "%c%02d%c %02d' %02d\"", sign, d, kDegreeSymbol, m, s);
 }
 
 String makeRaDecLabel(double raHours, double decDegrees) {
@@ -285,7 +292,7 @@ String makeRaDecLabel(double raHours, double decDegrees) {
     decSeconds = 0;
   }
   char decBuffer[16];
-  snprintf(decBuffer, sizeof(decBuffer), "%c%02d%c%02d'%02d\"", sign, d, 0xB0, decMinutes, decSeconds);
+  snprintf(decBuffer, sizeof(decBuffer), "%c%02d%c%02d'%02d\"", sign, d, kDegreeSymbol, decMinutes, decSeconds);
 
   String label(raBuffer);
   label += " / ";
@@ -466,7 +473,7 @@ void drawStatus() {
   double altDeg = motion::stepsToAltDegrees(motion::getStepCount(Axis::Alt));
   char azBuffer[24];
   char altBuffer[24];
-  snprintf(azBuffer, sizeof(azBuffer), "%06.2f%c", azDeg, 0xB0);
+  snprintf(azBuffer, sizeof(azBuffer), "%06.2f%c", azDeg, kDegreeSymbol);
   formatDec(altDeg, altBuffer, sizeof(altBuffer));
 
   display.setCursor(0, 10);
@@ -503,7 +510,7 @@ void drawStatusMenuPrompt() {
   display.fillRect(0, footerY, config::OLED_WIDTH, 8, SSD1306_WHITE);
   display.setTextColor(SSD1306_BLACK);
   display.setCursor(0, footerY);
-  display.print("Menü");
+  display.print("Menu");
   display.setTextColor(SSD1306_WHITE);
 }
 
@@ -550,7 +557,8 @@ void drawRtcEditor() {
   display.print("RTC Setup");
   int y = 24;
   const char* labels[] = {"Year", "Month", "Day", "Hour", "Min", "Sec"};
-  int values[] = {rtcEdit.year, rtcEdit.month, rtcEdit.day, rtcEdit.hour, rtcEdit.minute, rtcEdit.second};
+  int values[] = {rtcEdit.year,       rtcEdit.month,  rtcEdit.day,
+                  rtcEdit.hour,       rtcEdit.minute, rtcEdit.second};
   for (int i = 0; i < 6; ++i) {
     bool selected = rtcEdit.fieldIndex == i;
     if (selected) {
@@ -566,56 +574,73 @@ void drawRtcEditor() {
     }
     y += 8;
   }
+
+  bool backSelected = rtcEdit.fieldIndex == kRtcFieldCount - 1;
+  if (backSelected) {
+    display.fillRect(0, y, config::OLED_WIDTH, 8, SSD1306_WHITE);
+    display.setTextColor(SSD1306_BLACK);
+  } else {
+    display.setTextColor(SSD1306_WHITE);
+  }
+  display.setCursor(0, y);
+  display.print("Back");
+  if (backSelected) {
+    display.setTextColor(SSD1306_WHITE);
+  }
+
   display.setCursor(0, 60);
-  display.print("Press enc=Save");
+  display.print("Joy=Next Enc=Save/Back");
 }
 
 void drawLocationSetup() {
   display.setCursor(0, 12);
   display.print("Location");
   int y = 24;
-  bool selected = locationEdit.fieldIndex == 0;
-  if (selected) {
-    display.fillRect(0, y, config::OLED_WIDTH, 8, SSD1306_WHITE);
-    display.setTextColor(SSD1306_BLACK);
-  }
-  display.setCursor(0, y);
-  display.printf("Lat: %+07.3f%c", locationEdit.latitudeDeg, 0xB0);
-  if (selected) {
-    display.setTextColor(SSD1306_WHITE);
-  }
-  y += 8;
+  auto drawRow = [&](int fieldIndex, const String& text) {
+    bool selected = locationEdit.fieldIndex == fieldIndex;
+    if (selected) {
+      display.fillRect(0, y, config::OLED_WIDTH, 8, SSD1306_WHITE);
+      display.setTextColor(SSD1306_BLACK);
+    } else {
+      display.setTextColor(SSD1306_WHITE);
+    }
+    display.setCursor(0, y);
+    display.print(text);
+    if (selected) {
+      display.setTextColor(SSD1306_WHITE);
+    }
+    y += 8;
+  };
 
-  selected = locationEdit.fieldIndex == 1;
-  if (selected) {
-    display.fillRect(0, y, config::OLED_WIDTH, 8, SSD1306_WHITE);
-    display.setTextColor(SSD1306_BLACK);
-  }
-  display.setCursor(0, y);
-  display.printf("Lon: %+08.3f%c", locationEdit.longitudeDeg, 0xB0);
-  if (selected) {
-    display.setTextColor(SSD1306_WHITE);
-  }
-  y += 8;
+  char buffer[24];
+  snprintf(buffer, sizeof(buffer), "Lat: %+07.3f%c", locationEdit.latitudeDeg, kDegreeSymbol);
+  drawRow(0, buffer);
+  snprintf(buffer, sizeof(buffer), "Lon: %+08.3f%c", locationEdit.longitudeDeg, kDegreeSymbol);
+  drawRow(1, buffer);
 
-  selected = locationEdit.fieldIndex == 2;
-  if (selected) {
-    display.fillRect(0, y, config::OLED_WIDTH, 8, SSD1306_WHITE);
-    display.setTextColor(SSD1306_BLACK);
-  }
   int tz = locationEdit.timezoneMinutes;
   int absTz = abs(tz);
   int tzHours = absTz / 60;
   int tzMinutes = absTz % 60;
   char sign = tz >= 0 ? '+' : '-';
+  snprintf(buffer, sizeof(buffer), "TZ: %c%02d:%02d", sign, tzHours, tzMinutes);
+  drawRow(2, buffer);
+
+  bool backSelected = locationEdit.fieldIndex == kLocationFieldCount - 1;
+  if (backSelected) {
+    display.fillRect(0, y, config::OLED_WIDTH, 8, SSD1306_WHITE);
+    display.setTextColor(SSD1306_BLACK);
+  } else {
+    display.setTextColor(SSD1306_WHITE);
+  }
   display.setCursor(0, y);
-  display.printf("TZ: %c%02d:%02d", sign, tzHours, tzMinutes);
-  if (selected) {
+  display.print("Back");
+  if (backSelected) {
     display.setTextColor(SSD1306_WHITE);
   }
 
   display.setCursor(0, 60);
-  display.print("Joy=Next Enc=Save");
+  display.print("Joy=Next Enc=Save/Back");
 }
 
 void drawCatalog() {
@@ -658,7 +683,7 @@ void drawCatalog() {
   display.print("Dec: ");
   display.print(decBuffer);
   display.setCursor(0, 52);
-  display.printf("Alt: %+.1f%c Joy=Exit", altDeg, 0xB0);
+  display.printf("Alt: %+.1f%c Joy=Exit", altDeg, kDegreeSymbol);
   display.setCursor(0, 60);
   display.printf("Mag: %.1f %s", object->magnitude, above ? "" : "(below)");
   display.setCursor(78, 60);
@@ -699,8 +724,20 @@ void drawGotoSpeedSetup() {
     }
     y += 8;
   }
+  bool backSelected = gotoSpeedState.fieldIndex == kGotoSpeedFieldCount - 1;
+  if (backSelected) {
+    display.fillRect(0, y, config::OLED_WIDTH, 8, SSD1306_WHITE);
+    display.setTextColor(SSD1306_BLACK);
+  } else {
+    display.setTextColor(SSD1306_WHITE);
+  }
+  display.setCursor(0, y);
+  display.print("Back");
+  if (backSelected) {
+    display.setTextColor(SSD1306_WHITE);
+  }
   display.setCursor(0, 60);
-  display.print("Joy=Next Enc=Save");
+  display.print("Joy=Next Enc=Save/Back");
 }
 
 void drawBacklashCalibration() {
@@ -749,7 +786,7 @@ void drawGotoCoordinateEntry() {
   display.print("Dec");
   snprintf(buffer, sizeof(buffer), "%c", gotoCoordinateState.decNegative ? '-' : '+');
   drawSegment(3, 24, yDec, 12, buffer);
-  snprintf(buffer, sizeof(buffer), "%02d%c", gotoCoordinateState.decDegrees, 0xB0);
+  snprintf(buffer, sizeof(buffer), "%02d%c", gotoCoordinateState.decDegrees, kDegreeSymbol);
   drawSegment(4, 40, yDec, 28, buffer);
   snprintf(buffer, sizeof(buffer), "%02d'", gotoCoordinateState.decArcMinutes);
   drawSegment(5, 70, yDec, 24, buffer);
@@ -782,7 +819,7 @@ void enterGotoSpeedSetup() {
 }
 
 void handleGotoSpeedInput(int delta) {
-  if (delta != 0) {
+  if (delta != 0 && gotoSpeedState.fieldIndex < kGotoSpeedFieldCount - 1) {
     constexpr float step = 0.1f;
     switch (gotoSpeedState.fieldIndex) {
       case 0:
@@ -797,19 +834,23 @@ void handleGotoSpeedInput(int delta) {
     }
   }
   if (input::consumeJoystickPress()) {
-    gotoSpeedState.fieldIndex = (gotoSpeedState.fieldIndex + 1) % 3;
+    gotoSpeedState.fieldIndex = (gotoSpeedState.fieldIndex + 1) % kGotoSpeedFieldCount;
   }
-  bool select = input::consumeEncoderClick();
-  if (select) {
-    GotoProfile profile{gotoSpeedState.maxSpeed, gotoSpeedState.acceleration, gotoSpeedState.deceleration};
-    storage::setGotoProfile(profile);
-    showInfo("Goto saved");
-    setUiState(UiState::SetupMenu);
+  if (input::consumeEncoderClick()) {
+    if (gotoSpeedState.fieldIndex == kGotoSpeedFieldCount - 1) {
+      setUiState(UiState::SetupMenu);
+      showInfo("Goto unchanged");
+    } else {
+      GotoProfile profile{gotoSpeedState.maxSpeed, gotoSpeedState.acceleration, gotoSpeedState.deceleration};
+      storage::setGotoProfile(profile);
+      showInfo("Goto saved");
+      setUiState(UiState::SetupMenu);
+    }
   }
 }
 
 void handleLocationInput(int delta) {
-  if (delta != 0) {
+  if (delta != 0 && locationEdit.fieldIndex < kLocationFieldCount - 1) {
     switch (locationEdit.fieldIndex) {
       case 0:
         locationEdit.latitudeDeg =
@@ -829,13 +870,18 @@ void handleLocationInput(int delta) {
     }
   }
   if (input::consumeJoystickPress()) {
-    locationEdit.fieldIndex = (locationEdit.fieldIndex + 1) % 3;
+    locationEdit.fieldIndex = (locationEdit.fieldIndex + 1) % kLocationFieldCount;
   }
   if (input::consumeEncoderClick()) {
-    storage::setObserverLocation(
-        locationEdit.latitudeDeg, locationEdit.longitudeDeg, locationEdit.timezoneMinutes);
-    showInfo("Location saved");
-    setUiState(UiState::SetupMenu);
+    if (locationEdit.fieldIndex == kLocationFieldCount - 1) {
+      setUiState(UiState::SetupMenu);
+      showInfo("Location unchanged");
+    } else {
+      storage::setObserverLocation(
+          locationEdit.latitudeDeg, locationEdit.longitudeDeg, locationEdit.timezoneMinutes);
+      showInfo("Location saved");
+      setUiState(UiState::SetupMenu);
+    }
   }
 }
 
@@ -992,8 +1038,8 @@ void handleGotoCoordinateInput(int delta) {
     manualGotoDecDegrees = dec;
     String label = makeRaDecLabel(ra, dec);
     if (startGotoToCoordinates(ra, dec, label)) {
-      selectedObjectName = label;
-      gotoTargetName = label;
+      selectedObjectName = sanitizeForDisplay(label);
+      gotoTargetName = sanitizeForDisplay(label);
       systemState.selectedCatalogIndex = -1;
       systemState.menuMode = MenuMode::Status;
       setUiState(UiState::StatusScreen);
@@ -1384,7 +1430,7 @@ bool planGotoTarget(const String& targetName, int targetCatalogIndex, ComputeFn 
   systemState.gotoActive = true;
   systemState.azGotoTarget = targetAzSteps;
   systemState.altGotoTarget = targetAltSteps;
-  gotoTargetName = targetName;
+  gotoTargetName = sanitizeForDisplay(targetName);
   motion::clearGotoRates();
   stopTracking();
   showInfo("Goto started");
@@ -1563,8 +1609,8 @@ void startGotoToSelected() {
     return;
   }
   if (startGotoToObject(*object, systemState.selectedCatalogIndex)) {
-    selectedObjectName = object->name;
-    gotoTargetName = object->name;
+    selectedObjectName = sanitizeForDisplay(object->name);
+    gotoTargetName = sanitizeForDisplay(object->name);
   }
 }
 
@@ -1573,6 +1619,12 @@ void handleMainMenuInput(int delta) {
     mainMenuIndex += delta;
     while (mainMenuIndex < 0) mainMenuIndex += static_cast<int>(kMainMenuCount);
     while (mainMenuIndex >= static_cast<int>(kMainMenuCount)) mainMenuIndex -= static_cast<int>(kMainMenuCount);
+  }
+  if (input::consumeJoystickPress()) {
+    systemState.menuMode = MenuMode::Status;
+    setUiState(UiState::StatusScreen);
+    showInfo("Main menu closed", 1500);
+    return;
   }
   bool select = input::consumeEncoderClick();
   if (!select) {
@@ -1637,6 +1689,11 @@ void handleSetupMenuInput(int delta) {
     while (setupMenuIndex >= static_cast<int>(kSetupMenuCount))
       setupMenuIndex -= static_cast<int>(kSetupMenuCount);
   }
+  if (input::consumeJoystickPress()) {
+    setUiState(UiState::MainMenu);
+    showInfo("Setup closed", 1500);
+    return;
+  }
   bool select = input::consumeEncoderClick();
   if (!select) {
     return;
@@ -1670,7 +1727,7 @@ void handleSetupMenuInput(int delta) {
 }
 
 void handleRtcInput(int delta) {
-  if (delta != 0) {
+  if (delta != 0 && rtcEdit.fieldIndex < kRtcFieldCount - 1) {
     switch (rtcEdit.fieldIndex) {
       case 0:
         rtcEdit.year = std::clamp(rtcEdit.year + delta, 2020, 2100);
@@ -1697,11 +1754,15 @@ void handleRtcInput(int delta) {
     }
   }
   if (input::consumeJoystickPress()) {
-    rtcEdit.fieldIndex = (rtcEdit.fieldIndex + 1) % 6;
+    rtcEdit.fieldIndex = (rtcEdit.fieldIndex + 1) % kRtcFieldCount;
   }
-  bool select = input::consumeEncoderClick();
-  if (select) {
-    applyRtcEdit();
+  if (input::consumeEncoderClick()) {
+    if (rtcEdit.fieldIndex == kRtcFieldCount - 1) {
+      setUiState(UiState::SetupMenu);
+      showInfo("RTC unchanged");
+    } else {
+      applyRtcEdit();
+    }
   }
 }
 
@@ -1728,8 +1789,8 @@ void handleCatalogInput(int delta) {
     const CatalogObject* object = catalog::get(static_cast<size_t>(catalogIndex));
     if (object) {
       if (startGotoToObject(*object, catalogIndex)) {
-        selectedObjectName = object->name;
-        gotoTargetName = object->name;
+        selectedObjectName = sanitizeForDisplay(object->name);
+        gotoTargetName = sanitizeForDisplay(object->name);
       }
     }
   }
@@ -1763,7 +1824,8 @@ void stopTracking() {
 void init() {
   Wire.begin(config::SDA_PIN, config::SCL_PIN);
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-    Serial.println("OLED init failed");
+    // OLED init failure will be reported via on-screen message; avoid serial
+    // output because the primary UART is reserved for the inter-board link.
   }
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
@@ -1874,7 +1936,7 @@ void handleInput() {
 void showInfo(const String& message, uint32_t durationMs) {
   uint32_t until = millis() + durationMs;
   portENTER_CRITICAL(&displayMux);
-  infoMessage = message;
+  infoMessage = sanitizeForDisplay(message);
   infoUntil = until;
   portEXIT_CRITICAL(&displayMux);
 }
@@ -1910,4 +1972,6 @@ void startPolarAlignment() {
 void update() { updateGoto(); }
 
 }  // namespace display_menu
+
+#endif  // DEVICE_ROLE_HID
 

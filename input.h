@@ -1,5 +1,7 @@
 #pragma once
 
+#if defined(DEVICE_ROLE_HID)
+
 #include <Arduino.h>
 
 #include "calibration.h"
@@ -19,4 +21,6 @@ int getJoystickCenterY();
 void setJoystickCalibration(const JoystickCalibration& calibration);
 
 } // namespace input
+
+#endif  // DEVICE_ROLE_HID
 

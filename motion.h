@@ -31,5 +31,9 @@ void setBacklash(const BacklashConfig& backlash);
 int32_t getBacklashSteps(Axis axis);
 int8_t getLastDirection(Axis axis);
 
+#if defined(DEVICE_ROLE_MAIN)
+void motorTaskLoop();
+#endif
+
 } // namespace motion
 

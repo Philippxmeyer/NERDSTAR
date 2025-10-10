@@ -1,5 +1,7 @@
 #include "input.h"
 
+#if defined(DEVICE_ROLE_HID)
+
 #include <math.h>
 #include <stdint.h>
 
@@ -9,8 +11,8 @@ namespace {
 
 portMUX_TYPE encoderMux = portMUX_INITIALIZER_UNLOCKED;
 volatile int encoderTicks = 0;
-volatile int encoderSubSteps = 0;
 volatile uint8_t encoderState = 0;
+volatile int8_t encoderStepAccumulator = 0;
 volatile bool encoderClick = false;
 volatile bool joystickClick = false;
 volatile uint32_t lastEncoderEdgeUs = 0;
@@ -28,38 +30,33 @@ constexpr int8_t kTransitionTable[4][4] = {
 JoystickCalibration currentCalibration{2048, 2048};
 bool lastJoystickState = false;
 
-void IRAM_ATTR handleEncoderEdge() {
-  const uint32_t now = micros();
+constexpr int8_t kQuadratureTable[16] = {
+    0,  -1, 1,  0,   // 00 -> 00/01/10/11
+    1,  0,  0,  -1,  // 01 -> 00/01/10/11
+    -1, 0,  0,  1,   // 10 -> 00/01/10/11
+    0,  1,  -1, 0};  // 11 -> 00/01/10/11
 
+void IRAM_ATTR updateEncoderState() {
+  uint8_t a = static_cast<uint8_t>(digitalRead(config::ROT_A));
+  uint8_t b = static_cast<uint8_t>(digitalRead(config::ROT_B));
+  uint8_t current = static_cast<uint8_t>((a << 1) | b);
+  uint8_t previous = encoderState & 0x03;
+  uint8_t index = static_cast<uint8_t>((previous << 2) | current);
+  encoderState = current;
+  int8_t movement = kQuadratureTable[index];
+  encoderStepAccumulator += movement;
+  if (encoderStepAccumulator >= 4) {
+    encoderTicks++;
+    encoderStepAccumulator = 0;
+  } else if (encoderStepAccumulator <= -4) {
+    encoderTicks--;
+    encoderStepAccumulator = 0;
+  }
+}
+
+void IRAM_ATTR handleEncoderPinA() {
   portENTER_CRITICAL_ISR(&encoderMux);
-  if (now - lastEncoderEdgeUs < ENCODER_DEBOUNCE_US) {
-    portEXIT_CRITICAL_ISR(&encoderMux);
-    return;
-  }
-  const bool levelA = (digitalRead(config::ROT_A) == HIGH);
-  const bool levelB = (digitalRead(config::ROT_B) == HIGH);
-  const uint8_t newState = static_cast<uint8_t>(((levelA ? 1u : 0u) << 1) | (levelB ? 1u : 0u));
-
-  if (newState == encoderState) {
-    portEXIT_CRITICAL_ISR(&encoderMux);
-    return;
-  }
-
-  lastEncoderEdgeUs = now;
-
-  const int8_t step = kTransitionTable[encoderState][newState];
-  encoderState = newState;
-  if (step != 0) {
-    encoderSubSteps += step;
-    if (encoderSubSteps >= kEncoderStepsPerNotch) {
-      encoderSubSteps -= kEncoderStepsPerNotch;
-      encoderTicks++;
-    } else if (encoderSubSteps <= -kEncoderStepsPerNotch) {
-      encoderSubSteps += kEncoderStepsPerNotch;
-      encoderTicks--;
-    }
-  }
-
+  updateEncoderState();
   portEXIT_CRITICAL_ISR(&encoderMux);
 }
 
@@ -68,7 +65,9 @@ void IRAM_ATTR handleEncoderPinA() {
 }
 
 void IRAM_ATTR handleEncoderPinB() {
-  handleEncoderEdge();
+  portENTER_CRITICAL_ISR(&encoderMux);
+  updateEncoderState();
+  portEXIT_CRITICAL_ISR(&encoderMux);
 }
 
 void IRAM_ATTR handleEncoderButton() {
@@ -95,13 +94,9 @@ void init() {
   pinMode(config::ROT_B, INPUT_PULLUP);
   pinMode(config::ROT_BTN, INPUT_PULLUP);
 
-  portENTER_CRITICAL(&encoderMux);
-  bool levelA = digitalRead(config::ROT_A) == HIGH;
-  bool levelB = digitalRead(config::ROT_B) == HIGH;
-  encoderState = static_cast<uint8_t>(((levelA ? 1u : 0u) << 1) | (levelB ? 1u : 0u));
-  encoderSubSteps = 0;
-  encoderTicks = 0;
-  portEXIT_CRITICAL(&encoderMux);
+  encoderState = static_cast<uint8_t>((digitalRead(config::ROT_A) << 1) |
+                                      digitalRead(config::ROT_B));
+  encoderStepAccumulator = 0;
 
   attachInterrupt(digitalPinToInterrupt(config::ROT_A), handleEncoderPinA, CHANGE);
   attachInterrupt(digitalPinToInterrupt(config::ROT_B), handleEncoderPinB, CHANGE);
@@ -182,5 +177,7 @@ void setJoystickCalibration(const JoystickCalibration& calibration) {
   currentCalibration = calibration;
 }
 
-} // namespace input
+}  // namespace input
+
+#endif  // DEVICE_ROLE_HID
 

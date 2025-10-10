@@ -12,7 +12,18 @@ Diese Anleitung führt dich Schritt für Schritt durch Inbetriebnahme und Bedien
    - Kopiere die Datei [`data/catalog.xml`](../data/catalog.xml) auf die SD-Karte.
    - Die Datei enthält 200 Beispielobjekte (Sterne, Messier-Objekte, Planeten) im XML-Format und kann bei Bedarf erweitert werden.
 3. **Verdrahtung gemäß Pinbelegung**
-   - Pins siehe Tabelle im README (I²C an GPIO 21/22, SD-CS an GPIO 15 usw.).
+   - **ESP32 (Hauptrechner)** → Steppertreiber
+     - RA-Treiber: STEP 25, DIR 26, EN 27, UART TX 17 → PDN/UART, UART RX 16 ← PDN/UART
+     - DEC-Treiber: STEP 13, DIR 12, EN 14, UART TX 5 → PDN/UART, UART RX 4 ← PDN/UART
+     - Gemeinsame Versorgung 5 V und GND zu beiden TMC2209-Modulen
+   - **ESP32 (HID)** → Eingabe- & Anzeigeeinheit
+     - OLED & RTC: SDA 21 / SCL 22 (I²C, 3.3 V/GND)
+     - SD-Karte: CS 15, MOSI 23, MISO 19, SCK 18 (VSPI-Standard) + 3.3 V/GND
+     - Rotary-Encoder: A 23, B 19, Button 18
+     - Joystick: VRx 34, VRy 35, Button 32
+   - **ESP32 ↔ ESP32 (UART-Link)**
+     - Main-TX (1) → HID-RX (3), Main-RX (3) ← HID-TX (1)
+     - Gemeinsame Masse verbinden (GND ↔ GND)
 4. **Firmware flashen**
    - Bibliotheken installieren (`TMCStepper`, `Adafruit_SSD1306`, `Adafruit_GFX`, `RTClib`, `SD`)
    - Sketch `NERDSTAR.ino` mit den neuen Modulen kompilieren und auf den ESP32 flashen.

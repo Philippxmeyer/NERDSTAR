@@ -1,5 +1,7 @@
 #pragma once
 
+#if defined(DEVICE_ROLE_HID)
+
 #include <Arduino.h>
 
 namespace display_menu {
@@ -19,4 +21,6 @@ void setSdAvailable(bool available);
 void stopTracking();
 
 } // namespace display_menu
+
+#endif  // DEVICE_ROLE_HID
 

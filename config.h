@@ -2,6 +2,8 @@
 
 #include <Arduino.h>
 
+#include "role_config.h"
+
 namespace config {
 
 // Stepper driver pins for Azimuth axis
@@ -45,6 +47,12 @@ constexpr uint32_t SD_SPI_FREQUENCY_HZ = 8000000;
 // SD card initialization behavior
 constexpr uint32_t SD_INIT_TIMEOUT_MS = 1500;
 constexpr uint16_t SD_INIT_RETRY_DELAY_MS = 100;
+
+// Inter-board communication (UART0 by default, pins 1/3)
+constexpr uint8_t COMM_TX_PIN = 1;
+constexpr uint8_t COMM_RX_PIN = 3;
+constexpr uint32_t COMM_BAUDRATE = 115200;
+constexpr uint32_t COMM_RESPONSE_TIMEOUT_MS = 200;
 
 // Driver configuration
 constexpr float R_SENSE = 0.11f;
