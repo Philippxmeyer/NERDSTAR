@@ -52,7 +52,7 @@ und irgendwann sagen: „Lauf, kleiner ESP, lauf mit den Sternen.“
 
 | Komponente             | Aufgabe                             | Pins / Anschlüsse                     |
 | ---------------------- | ----------------------------------- | ------------------------------------- |
-| **ESP32 (Hauptrechner)** | Kursberechnung + Motorsteuerung      | UART1 TX (33) ↔ HID-RX, UART1 RX (32) ↔ HID-TX |
+| **ESP32 (Hauptrechner)** | Kursberechnung + Motorsteuerung      | UART0 TX (1) ↔ HID-RX, UART0 RX (3) ↔ HID-TX |
 | **ESP32-C3 (HID)**     | Display, Eingaben, EEPROM-Katalog    | UART1 TX (21) ↔ Main-RX, UART1 RX (20) ↔ Main-TX |
 | **TMC2209 (RA)**       | Dreht um die Rektaszensions-Achse   | STEP 25, DIR 26, EN 27, UART TX/RX = 17/16 |
 | **TMC2209 (DEC)**      | Dreht um die Deklinations-Achse     | STEP 13, DIR 12, EN 14, UART TX/RX = 5/4 |
@@ -99,7 +99,7 @@ und irgendwann sagen: „Lauf, kleiner ESP, lauf mit den Sternen.“
 - **TX ↔ RX kreuzen:** Main-TX (GPIO 33) → HID-RX (GPIO 20) und Main-RX (GPIO 32) ← HID-TX (GPIO 21)
 - **GND verbinden:** Gemeinsamer Bezugspunkt für UART und Sensoren
 - Optional: **5 V / 3.3 V** gemeinsam einspeisen, wenn beide Boards aus derselben Quelle versorgt werden
-- USB bleibt frei: Beide Boards können weiterhin über ihren USB-Port debuggt bzw. mit Logausgaben versorgt werden.
+- Hinweis: Während die Boards miteinander sprechen, ist derselbe UART auch am USB-Seriell-Wandler angebunden. Debug-Logs über USB funktionieren weiterhin, aber es werden alle Protokollnachrichten mitgeschnitten.
 
 Diese Belegung entspricht exakt den Konstanten in [`config.h`](config.h) und stellt sicher, dass jede Komponente am richtigen Controller hängt.
 
@@ -139,10 +139,9 @@ NERDSTAR/
   Schrittmotoren, startet zwei Tasks (Core 0 = Kursberechnung & Protokoll,
   Core 1 = Motorsteuerung) und beantwortet alle Motion-RPCs.
 
-Beide Varianten verwenden nun **UART1** für die Verbindung: Beim Hauptrechner
-laufen die Leitungen über **TX33/RX32**, die HID-Variante mit dem ESP32-C3
-SuperMini nutzt **TX21/RX20**. Damit bleibt der jeweilige USB-Seriell-Port für
-Debugging und Logausgaben frei.
+Beide Varianten verwenden den Standard-UART0 als Link: Beim Hauptrechner
+liegen die Leitungen auf **TX1/RX3**, die HID-Variante mit dem ESP32-C3
+SuperMini nutzt **TX21/RX20**. Damit teilen sich UART-Link und USB-Debug-Port den gleichen Kanal.
 
 ---
 
