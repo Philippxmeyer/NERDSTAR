@@ -1,5 +1,7 @@
 #include "role_config.h"
 
+#include "wifi_ota.h"
+
 #if defined(DEVICE_ROLE_HID)
 
 #include <math.h>
@@ -14,6 +16,7 @@
 #include "storage.h"
 
 void setup() {
+  wifi_ota::init();
   comm::initLink();
   comm::waitForReady(0);
 
@@ -71,6 +74,7 @@ void loop() {
     display_menu::showInfo("Motion stopped", 2000);
   }
 
+  wifi_ota::update();
   delay(20);
 }
 
@@ -163,6 +167,11 @@ void handleRequest(const comm::Request& request) {
     double alt = strtod(request.params[1].c_str(), nullptr);
     motion::setTrackingRates(az, alt);
     comm::sendOk(request.id, {});
+  } else if (cmd == "SET_WIFI_ENABLED") {
+    if (!requireParams(1)) return;
+    bool enabled = request.params[0] == "1";
+    wifi_ota::setEnabled(enabled);
+    comm::sendOk(request.id, {});
   } else if (cmd == "GET_STEP_COUNT") {
     if (!requireParams(1)) return;
     Axis axis;
@@ -245,6 +254,7 @@ void motorTask(void*) {
 }  // namespace
 
 void setup() {
+  wifi_ota::init();
   comm::initLink();
   storage::init();
   motion::init();
@@ -257,7 +267,10 @@ void setup() {
                           &commandTaskHandle, 0);
 }
 
-void loop() { vTaskDelay(pdMS_TO_TICKS(100)); }
+void loop() {
+  wifi_ota::update();
+  vTaskDelay(pdMS_TO_TICKS(20));
+}
 
 #endif
 

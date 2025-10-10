@@ -12,6 +12,7 @@
 #include <limits.h>
 
 #include "catalog.h"
+#include "comm.h"
 #include "config.h"
 #include "input.h"
 #include "motion.h"
@@ -19,6 +20,7 @@
 #include "state.h"
 #include "storage.h"
 #include "text_utils.h"
+#include "wifi_ota.h"
 
 namespace display_menu {
 namespace {
@@ -182,8 +184,18 @@ constexpr size_t kMainMenuCount = sizeof(kMainMenuItems) / sizeof(kMainMenuItems
 
 int setupMenuIndex = 0;
 constexpr const char* kSetupMenuItems[] = {
-    "Set RTC", "Set Location", "Cal Joystick", "Cal Axes", "Goto Speed", "Cal Backlash", "Back"};
+    "Set RTC",       "Set Location", "Cal Joystick", "Cal Axes",
+    "Goto Speed",    "Cal Backlash", "WiFi OTA",     "Back"};
 constexpr size_t kSetupMenuCount = sizeof(kSetupMenuItems) / sizeof(kSetupMenuItems[0]);
+
+constexpr int kSetupMenuRtcIndex = 0;
+constexpr int kSetupMenuLocationIndex = 1;
+constexpr int kSetupMenuJoystickIndex = 2;
+constexpr int kSetupMenuAxisCalIndex = 3;
+constexpr int kSetupMenuGotoSpeedIndex = 4;
+constexpr int kSetupMenuBacklashIndex = 5;
+constexpr int kSetupMenuWifiIndex = 6;
+constexpr int kSetupMenuBackIndex = 7;
 
 int catalogIndex = 0;
 
@@ -545,6 +557,9 @@ void drawSetupMenu() {
     }
     display.setCursor(0, y);
     display.print(kSetupMenuItems[i]);
+    if (static_cast<int>(i) == kSetupMenuWifiIndex) {
+      display.print(wifi_ota::isEnabled() ? ": On" : ": Off");
+    }
     if (selected) {
       display.setTextColor(SSD1306_WHITE);
     }
@@ -1698,26 +1713,41 @@ void handleSetupMenuInput(int delta) {
     return;
   }
   switch (setupMenuIndex) {
-    case 0:
+    case kSetupMenuRtcIndex:
       enterRtcEditor();
       break;
-    case 1:
+    case kSetupMenuLocationIndex:
       enterLocationSetup();
       break;
-    case 2:
+    case kSetupMenuJoystickIndex:
       startJoystickCalibrationFlow();
       break;
-    case 3:
+    case kSetupMenuAxisCalIndex:
       resetAxisCalibrationState();
       showInfo("Set Az 0");
       break;
-    case 4:
+    case kSetupMenuGotoSpeedIndex:
       enterGotoSpeedSetup();
       break;
-    case 5:
+    case kSetupMenuBacklashIndex:
       startBacklashCalibration();
       break;
-    case 6:
+    case kSetupMenuWifiIndex: {
+      bool enable = !wifi_ota::isEnabled();
+      wifi_ota::setEnabled(enable);
+      String error;
+      if (!comm::call("SET_WIFI_ENABLED", {enable ? "1" : "0"}, nullptr, &error)) {
+        String message = "Main WiFi: ";
+        message += error.isEmpty() ? "failed" : error;
+        showInfo(message, 2000);
+      } else if (enable) {
+        showInfo(String("WiFi AP: ") + wifi_ota::accessPointSsid(), 2500);
+      } else {
+        showInfo("WiFi disabled", 1500);
+      }
+      break;
+    }
+    case kSetupMenuBackIndex:
       setUiState(UiState::MainMenu);
       break;
     default:
