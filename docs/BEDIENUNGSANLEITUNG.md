@@ -7,10 +7,10 @@ Diese Anleitung führt dich Schritt für Schritt durch Inbetriebnahme und Bedien
 1. **Hardware prüfen**
    - ESP32 mit TMC2209-Treibern für Azimut- und Höhenachse (Alt/Az)
    - OLED-Display (SSD1306), Rotary-Encoder, KY-023-Joystick
-   - DS3231-RTC und Micro-SD-Karte (FAT32 formatiert)
-2. **SD-Karte bestücken**
-   - Kopiere die Datei [`data/catalog.xml`](../data/catalog.xml) auf die SD-Karte.
-   - Die Datei enthält 200 Beispielobjekte (Sterne, Messier-Objekte, Planeten) im XML-Format und kann bei Bedarf erweitert werden.
+   - DS3231-RTC (I²C)
+2. **Katalog**
+   - Der komplette Objektkatalog liegt fest im EEPROM. Eine SD-Karte ist nicht mehr erforderlich.
+   - Anpassungen erfolgen über [`data/catalog.xml`](../data/catalog.xml); anschließend muss die Firmware neu gebaut werden.
 3. **Verdrahtung gemäß Pinbelegung**
    - **ESP32 (Hauptrechner)** → Steppertreiber
      - RA-Treiber: STEP 25, DIR 26, EN 27, UART TX 17 → PDN/UART, UART RX 16 ← PDN/UART
@@ -18,14 +18,13 @@ Diese Anleitung führt dich Schritt für Schritt durch Inbetriebnahme und Bedien
      - Gemeinsame Versorgung 5 V und GND zu beiden TMC2209-Modulen
    - **ESP32 (HID)** → Eingabe- & Anzeigeeinheit
      - OLED & RTC: SDA 21 / SCL 22 (I²C, 3.3 V/GND)
-     - SD-Karte: CS 15, MOSI 23, MISO 19, SCK 18 (VSPI-Standard) + 3.3 V/GND
-     - Rotary-Encoder: A 23, B 19, Button 18
+     - Rotary-Encoder: A 36, B 39, Button 33
      - Joystick: VRx 34, VRy 35, Button 32
    - **ESP32 ↔ ESP32 (UART-Link)**
      - Main-TX (1) → HID-RX (3), Main-RX (3) ← HID-TX (1)
      - Gemeinsame Masse verbinden (GND ↔ GND)
 4. **Firmware flashen**
-   - Bibliotheken installieren (`TMCStepper`, `Adafruit_SSD1306`, `Adafruit_GFX`, `RTClib`, `SD`)
+   - Bibliotheken installieren (`TMCStepper`, `Adafruit_SSD1306`, `Adafruit_GFX`, `RTClib`)
    - Sketch `NERDSTAR.ino` mit den neuen Modulen kompilieren und auf den ESP32 flashen.
 
 ## 2. Erstinbetriebnahme
@@ -117,7 +116,6 @@ Diese Anleitung führt dich Schritt für Schritt durch Inbetriebnahme und Bedien
 
 - **Not-Stopp**: Joystick drücken stoppt alle Motoren, Tracking wird deaktiviert.
 - **Horizontschutz**: Goto-Kommandos unterhalb des mathematischen Horizonts werden automatisch verhindert.
-- **SD-Karte**: Änderungen an `catalog.xml` nur bei ausgeschaltetem Gerät oder mit sicherem Entfernen.
 - **EEPROM**: Konfiguration (Kalibrierungen, RTC-Zeitstempel, Align-Status) wird automatisch gesichert.
 - **Planeten-Update**: Für exakte Positionen sollte die RTC regelmäßig synchronisiert werden.
 

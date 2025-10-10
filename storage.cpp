@@ -2,8 +2,6 @@
 
 #include <Arduino.h>
 #include <EEPROM.h>
-#include <SD.h>
-#include <SPI.h>
 #include <math.h>
 
 #include "config.h"
@@ -11,7 +9,18 @@
 namespace {
 
 constexpr uint32_t kConfigMagic = 0x4E455244;  // "NERD"
-constexpr size_t kEepromSize = 256;
+constexpr size_t kConfigStorageSize = 256;
+constexpr uint32_t kCatalogMagic = 0x4E434154;  // "NCAT"
+constexpr uint16_t kCatalogVersion = 1;
+
+struct __attribute__((packed)) CatalogHeader {
+  uint32_t magic;
+  uint16_t version;
+  uint16_t count;
+  uint16_t entriesOffset;
+  uint16_t namesOffset;
+  uint16_t namesLength;
+};
 
 SystemConfig systemConfig{
     kConfigMagic,
@@ -27,7 +36,22 @@ SystemConfig systemConfig{
     false,
     0};
 
-bool sdAvailable = false;
+static_assert(sizeof(storage::CatalogEntry) == 9, "CatalogEntry packing mismatch");
+static_assert(sizeof(CatalogHeader) == 14, "CatalogHeader packing mismatch");
+
+#include "catalog_data.inc"
+
+constexpr size_t kCatalogHeaderOffset = kConfigStorageSize;
+constexpr size_t kCatalogEntriesOffset = kCatalogHeaderOffset + sizeof(CatalogHeader);
+constexpr size_t kCatalogNamesOffset =
+    kCatalogEntriesOffset + kCatalogEntryCount * sizeof(storage::CatalogEntry);
+constexpr size_t kCatalogStorageSize = sizeof(CatalogHeader) +
+                                       kCatalogEntryCount * sizeof(storage::CatalogEntry) +
+                                       kCatalogNameTableSize;
+constexpr size_t kEepromSize = kConfigStorageSize + kCatalogStorageSize;
+
+static_assert(kCatalogNamesOffset + kCatalogNameTableSize <= kEepromSize,
+              "EEPROM size insufficient for catalog data");
 
 void applyDefaults() {
   constexpr double stepsPerMotorRev = config::FULLSTEPS_PER_REV * config::MICROSTEPS;
@@ -51,9 +75,41 @@ void applyDefaults() {
   systemConfig.lastRtcEpoch = 0;
 }
 
-void saveConfig() {
+void saveConfigInternal() {
   EEPROM.put(0, systemConfig);
   EEPROM.commit();
+}
+
+bool catalogDataIsValid() {
+  CatalogHeader header{};
+  EEPROM.get(kCatalogHeaderOffset, header);
+  return header.magic == kCatalogMagic && header.version == kCatalogVersion &&
+         header.count == kCatalogEntryCount && header.entriesOffset == kCatalogEntriesOffset &&
+         header.namesOffset == kCatalogNamesOffset && header.namesLength == kCatalogNameTableSize;
+}
+
+void writeCatalogToEeprom() {
+  CatalogHeader header{kCatalogMagic,
+                       kCatalogVersion,
+                       static_cast<uint16_t>(kCatalogEntryCount),
+                       static_cast<uint16_t>(kCatalogEntriesOffset),
+                       static_cast<uint16_t>(kCatalogNamesOffset),
+                       static_cast<uint16_t>(kCatalogNameTableSize)};
+  EEPROM.put(kCatalogHeaderOffset, header);
+  for (size_t i = 0; i < kCatalogEntryCount; ++i) {
+    const auto& entry = kCatalogEntries[i];
+    EEPROM.put(kCatalogEntriesOffset + i * sizeof(storage::CatalogEntry), entry);
+  }
+  for (size_t i = 0; i < kCatalogNameTableSize; ++i) {
+    EEPROM.write(kCatalogNamesOffset + i, static_cast<uint8_t>(kCatalogNames[i]));
+  }
+  EEPROM.commit();
+}
+
+void ensureCatalogData() {
+  if (!catalogDataIsValid()) {
+    writeCatalogToEeprom();
+  }
 }
 
 }  // namespace
@@ -66,7 +122,7 @@ bool init() {
   if (systemConfig.magic != kConfigMagic || systemConfig.axisCalibration.stepsPerDegreeAz <= 0.0 ||
       systemConfig.axisCalibration.stepsPerDegreeAlt <= 0.0) {
     applyDefaults();
-    saveConfig();
+    saveConfigInternal();
   } else {
     if (systemConfig.gotoProfile.maxSpeedDegPerSec <= 0.0f ||
         systemConfig.gotoProfile.accelerationDegPerSec2 <= 0.0f ||
@@ -90,22 +146,8 @@ bool init() {
     }
   }
 
-  pinMode(config::SD_CS_PIN, OUTPUT);
-  digitalWrite(config::SD_CS_PIN, HIGH);
-  SPI.begin(config::SD_SCK_PIN, config::SD_MISO_PIN, config::SD_MOSI_PIN, config::SD_CS_PIN);
-
-  const uint32_t start = millis();
-  do {
-    sdAvailable = SD.begin(config::SD_CS_PIN, SPI, config::SD_SPI_FREQUENCY_HZ);
-    if (sdAvailable) {
-      break;
-    }
-    if (millis() - start >= config::SD_INIT_TIMEOUT_MS) {
-      break;
-    }
-    delay(config::SD_INIT_RETRY_DELAY_MS);
-  } while (true);
-  return sdAvailable;
+  ensureCatalogData();
+  return true;
 }
 
 const SystemConfig& getConfig() { return systemConfig; }
@@ -113,45 +155,70 @@ const SystemConfig& getConfig() { return systemConfig; }
 void setJoystickCalibration(const JoystickCalibration& calibration) {
   systemConfig.joystickCalibration = calibration;
   systemConfig.joystickCalibrated = true;
-  saveConfig();
+  saveConfigInternal();
 }
 
 void setAxisCalibration(const AxisCalibration& calibration) {
   systemConfig.axisCalibration = calibration;
   systemConfig.axisCalibrated = true;
-  saveConfig();
+  saveConfigInternal();
 }
 
 void setBacklash(const BacklashConfig& backlash) {
   systemConfig.backlash = backlash;
-  saveConfig();
+  saveConfigInternal();
 }
 
 void setGotoProfile(const GotoProfile& profile) {
   systemConfig.gotoProfile = profile;
-  saveConfig();
+  saveConfigInternal();
 }
 
 void setPolarAligned(bool aligned) {
   systemConfig.polarAligned = aligned;
-  saveConfig();
+  saveConfigInternal();
 }
 
 void setRtcEpoch(uint32_t epoch) {
   systemConfig.lastRtcEpoch = epoch;
-  saveConfig();
+  saveConfigInternal();
 }
 
 void setObserverLocation(double latitudeDeg, double longitudeDeg, int32_t timezoneMinutes) {
   systemConfig.observerLatitudeDeg = latitudeDeg;
   systemConfig.observerLongitudeDeg = longitudeDeg;
   systemConfig.timezoneOffsetMinutes = timezoneMinutes;
-  saveConfig();
+  saveConfigInternal();
 }
 
-void save() { saveConfig(); }
+void save() { saveConfigInternal(); }
 
-bool isSdAvailable() { return sdAvailable; }
+size_t getCatalogEntryCount() { return kCatalogEntryCount; }
+
+bool readCatalogEntry(size_t index, CatalogEntry& entry) {
+  if (index >= kCatalogEntryCount) {
+    return false;
+  }
+  size_t address = kCatalogEntriesOffset + index * sizeof(CatalogEntry);
+  EEPROM.get(address, entry);
+  return true;
+}
+
+bool readCatalogName(uint16_t offset, uint8_t length, char* buffer, size_t bufferSize) {
+  if (!buffer || bufferSize == 0) {
+    return false;
+  }
+  if (static_cast<size_t>(offset) + length > kCatalogNameTableSize) {
+    return false;
+  }
+  if (bufferSize <= length) {
+    return false;
+  }
+  for (uint8_t i = 0; i < length; ++i) {
+    buffer[i] = static_cast<char>(EEPROM.read(kCatalogNamesOffset + offset + i));
+  }
+  buffer[length] = '\0';
+  return true;
+}
 
 }  // namespace storage
-
