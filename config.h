@@ -6,6 +6,10 @@
 
 namespace config {
 
+// Role-specific pin mappings -------------------------------------------------
+
+#if defined(DEVICE_ROLE_MAIN)
+
 // Stepper driver pins for Azimuth axis
 constexpr uint8_t EN_RA = 27;
 constexpr uint8_t DIR_RA = 26;
@@ -20,24 +24,34 @@ constexpr uint8_t STEP_DEC = 13;
 constexpr uint8_t UART_DEC_TX = 5;
 constexpr uint8_t UART_DEC_RX = 4;
 
-// Joystick KY-023 pins
-constexpr uint8_t JOY_X = 34;
-constexpr uint8_t JOY_Y = 35;
-constexpr uint8_t JOY_BTN = 32; // LOW active
-
-// Rotary encoder pins  (weg von VSPI!)
-constexpr uint8_t ROT_A   = 36; // SENSOR_VP, input-only, ext. Pullup nötig wenn "nackter" Encoder
-constexpr uint8_t ROT_B   = 39; // SENSOR_VN, input-only, ext. Pullup nötig wenn "nackter" Encoder
-constexpr uint8_t ROT_BTN = 33; // mit INPUT_PULLUP betreiben
-
-
-// OLED + RTC I2C pins
-constexpr uint8_t SDA_PIN = 21;
-constexpr uint8_t SCL_PIN = 22;
-
-// Inter-board communication (UART0 by default, pins 1/3)
+// Inter-board communication (UART0 default pins on classic ESP32)
 constexpr uint8_t COMM_TX_PIN = 1;
 constexpr uint8_t COMM_RX_PIN = 3;
+
+#elif defined(DEVICE_ROLE_HID)
+
+// Joystick KY-023 pins (ESP32-C3 SuperMini)
+constexpr uint8_t JOY_X = 0;
+constexpr uint8_t JOY_Y = 1;
+constexpr uint8_t JOY_BTN = 6;  // LOW active
+
+// Rotary encoder pins (ESP32-C3 SuperMini)
+constexpr uint8_t ROT_A = 3;
+constexpr uint8_t ROT_B = 4;
+constexpr uint8_t ROT_BTN = 5;
+
+// OLED + RTC I2C pins (ESP32-C3 SuperMini default)
+constexpr uint8_t SDA_PIN = 8;
+constexpr uint8_t SCL_PIN = 9;
+
+// Inter-board communication (UART0 default pins on ESP32-C3)
+constexpr uint8_t COMM_TX_PIN = 21;
+constexpr uint8_t COMM_RX_PIN = 20;
+
+#else
+#error "Unsupported device role"
+#endif
+
 constexpr uint32_t COMM_BAUDRATE = 115200;
 constexpr uint32_t COMM_RESPONSE_TIMEOUT_MS = 200;
 

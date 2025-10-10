@@ -16,16 +16,16 @@ Diese Anleitung führt dich Schritt für Schritt durch Inbetriebnahme und Bedien
      - RA-Treiber: STEP 25, DIR 26, EN 27, UART TX 17 → PDN/UART, UART RX 16 ← PDN/UART
      - DEC-Treiber: STEP 13, DIR 12, EN 14, UART TX 5 → PDN/UART, UART RX 4 ← PDN/UART
      - Gemeinsame Versorgung 5 V und GND zu beiden TMC2209-Modulen
-   - **ESP32 (HID)** → Eingabe- & Anzeigeeinheit
-     - OLED & RTC: SDA 21 / SCL 22 (I²C, 3.3 V/GND)
-     - Rotary-Encoder: A 36, B 39, Button 33
-     - Joystick: VRx 34, VRy 35, Button 32
-   - **ESP32 ↔ ESP32 (UART-Link)**
-     - Main-TX (1) → HID-RX (3), Main-RX (3) ← HID-TX (1)
+   - **ESP32-C3 (HID)** → Eingabe- & Anzeigeeinheit
+     - OLED & RTC: SDA 8 / SCL 9 (I²C, 3.3 V/GND)
+     - Rotary-Encoder: A 3, B 4, Button 5
+     - Joystick: VRx 0, VRy 1, Button 6
+   - **ESP32 ↔ ESP32-C3 (UART-Link)**
+     - Main-TX (1) → HID-RX (20), Main-RX (3) ← HID-TX (21)
      - Gemeinsame Masse verbinden (GND ↔ GND)
 4. **Firmware flashen**
    - Bibliotheken installieren (`TMCStepper`, `Adafruit_SSD1306`, `Adafruit_GFX`, `RTClib`)
-   - Sketch `NERDSTAR.ino` mit den neuen Modulen kompilieren und auf den ESP32 flashen.
+   - Sketch `NERDSTAR.ino` mit den neuen Modulen kompilieren und auf die Boards flashen (HID: Board `ESP32C3 Dev Module`, Main: `ESP32 Dev Module`).
 
 ## 2. Erstinbetriebnahme
 
