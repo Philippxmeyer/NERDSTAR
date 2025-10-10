@@ -15,17 +15,20 @@
 #include "state.h"
 #include "storage.h"
 
+namespace {
+bool g_mountLinkReady = false;
+}
+
 void setup() {
   wifi_ota::init();
   comm::initLink();
-  comm::waitForReady(0);
+
+  display_menu::init();
+  display_menu::showBootMessage();
 
   storage::init();
   systemState.polarAligned = storage::getConfig().polarAligned;
   systemState.selectedCatalogIndex = -1;
-
-  display_menu::init();
-  display_menu::showBootMessage();
 
   input::init();
   if (storage::getConfig().joystickCalibrated) {
@@ -43,6 +46,11 @@ void setup() {
   motion::setBacklash(storage::getConfig().backlash);
   display_menu::showReady();
   display_menu::startTask();
+
+  g_mountLinkReady = comm::waitForReady(5000);
+  if (!g_mountLinkReady) {
+    display_menu::showInfo("Mount link offline", 2000);
+  }
 
   if (!catalog::init()) {
     display_menu::showInfo("Catalog missing", 2000);
@@ -72,6 +80,13 @@ void loop() {
     motion::stopAll();
     display_menu::stopTracking();
     display_menu::showInfo("Motion stopped", 2000);
+  }
+
+  if (!g_mountLinkReady) {
+    if (comm::waitForReady(1)) {
+      g_mountLinkReady = true;
+      display_menu::showInfo("Mount link ready", 2000);
+    }
   }
 
   wifi_ota::update();
