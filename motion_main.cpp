@@ -16,6 +16,7 @@
 #include <esp_timer.h>
 
 #include "config.h"
+#include "storage.h"
 
 namespace {
 
@@ -35,6 +36,11 @@ struct AxisState {
   double trackingStepsPerSecond;
   int8_t lastDirection;
   uint64_t nextStepDueUs;
+};
+
+struct ManualAxisControl {
+  double currentStepsPerSecond;
+  uint64_t lastUpdateUs;
 };
 
 AxisState axisAz{config::EN_RA,
@@ -59,6 +65,9 @@ AxisState axisAlt{config::EN_DEC,
                   1,
                   0};
 
+ManualAxisControl manualAzControl{0.0, 0};
+ManualAxisControl manualAltControl{0.0, 0};
+
 AxisCalibration calibration{
     (config::FULLSTEPS_PER_REV * config::MICROSTEPS * config::GEAR_RATIO) / 360.0,
     (config::FULLSTEPS_PER_REV * config::MICROSTEPS * config::GEAR_RATIO) / 360.0,
@@ -75,6 +84,15 @@ TMC2209Stepper driverAlt(&Serial1, config::R_SENSE, config::DRIVER_ADDR_DEC);
 
 AxisState& getAxisState(Axis axis) {
   return (axis == Axis::Az) ? axisAz : axisAlt;
+}
+
+ManualAxisControl& getManualControl(Axis axis) {
+  return (axis == Axis::Az) ? manualAzControl : manualAltControl;
+}
+
+double getAxisStepsPerDegree(Axis axis) {
+  return (axis == Axis::Az) ? calibration.stepsPerDegreeAz
+                            : calibration.stepsPerDegreeAlt;
 }
 
 bool isTrackingEnabled() {
@@ -266,7 +284,60 @@ void setManualRate(Axis axis, float rpm) {
 }
 
 void setManualStepsPerSecond(Axis axis, double stepsPerSecond) {
-  setAxisUserContribution(getAxisState(axis), stepsPerSecond);
+  if (!std::isfinite(stepsPerSecond)) {
+    stepsPerSecond = 0.0;
+  }
+
+  ManualAxisControl& control = getManualControl(axis);
+  const auto& profile = storage::getConfig().gotoProfile;
+  double stepsPerDegree = getAxisStepsPerDegree(axis);
+
+  double maxSpeed = profile.maxSpeedDegPerSec * stepsPerDegree;
+  if (maxSpeed <= 0.0) {
+    maxSpeed = std::numeric_limits<double>::infinity();
+  }
+  double acceleration = profile.accelerationDegPerSec2 * stepsPerDegree;
+  if (acceleration <= 0.0) {
+    acceleration = 1.0;
+  }
+  double deceleration = profile.decelerationDegPerSec2 * stepsPerDegree;
+  if (deceleration <= 0.0) {
+    deceleration = 1.0;
+  }
+
+  double target = stepsPerSecond;
+  if (std::isfinite(maxSpeed)) {
+    target = std::clamp(target, -maxSpeed, maxSpeed);
+  }
+
+  uint64_t nowUs = esp_timer_get_time();
+  double dt = 0.0;
+  if (control.lastUpdateUs != 0 && nowUs >= control.lastUpdateUs) {
+    dt = static_cast<double>(nowUs - control.lastUpdateUs) / 1000000.0;
+  }
+  control.lastUpdateUs = nowUs;
+
+  double current = control.currentStepsPerSecond;
+  if (dt <= 0.0) {
+    current = target;
+  } else {
+    double delta = target - current;
+    if (delta != 0.0) {
+      double limit = ((delta > 0.0) ? acceleration : deceleration) * dt;
+      if (limit <= 0.0 || std::fabs(delta) <= limit) {
+        current = target;
+      } else {
+        current += (delta > 0.0) ? limit : -limit;
+      }
+    }
+  }
+
+  if (std::fabs(current) < 1e-6 && target == 0.0) {
+    current = 0.0;
+  }
+
+  control.currentStepsPerSecond = current;
+  setAxisUserContribution(getAxisState(axis), current);
 }
 
 void setGotoStepsPerSecond(Axis axis, double stepsPerSecond) {
@@ -279,6 +350,11 @@ void clearGotoRates() {
 }
 
 void stopAll() {
+  manualAzControl.currentStepsPerSecond = 0.0;
+  manualAzControl.lastUpdateUs = esp_timer_get_time();
+  manualAltControl.currentStepsPerSecond = 0.0;
+  manualAltControl.lastUpdateUs = manualAzControl.lastUpdateUs;
+
   setAxisUserContribution(axisAz, 0.0);
   setAxisUserContribution(axisAlt, 0.0);
   setAxisGotoContribution(axisAz, 0.0);
