@@ -2,10 +2,6 @@
 
 #if defined(DEVICE_ROLE_MAIN)
 
-#include "motion.h"
-
-#if defined(DEVICE_ROLE_MAIN)
-
 #include <algorithm>
 #include <cmath>
 #include <limits>

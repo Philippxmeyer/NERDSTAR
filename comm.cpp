@@ -10,7 +10,7 @@
 
 namespace {
 
-HardwareSerial link(static_cast<int>(config::COMM_UART_NUM));
+HardwareSerial uartLink(static_cast<int>(config::COMM_UART_NUM));
 uint16_t nextRequestId = 1;
 #if defined(DEVICE_ROLE_HID)
 SemaphoreHandle_t rpcMutex = nullptr;
@@ -20,8 +20,8 @@ bool readLine(String& line, uint32_t timeoutMs) {
   line = "";
   uint32_t start = millis();
   while (true) {
-    while (link.available()) {
-      char c = static_cast<char>(link.read());
+    while (uartLink.available()) {
+      char c = static_cast<char>(uartLink.read());
       if (c == '\n') {
         return true;
       }
@@ -37,8 +37,8 @@ bool readLine(String& line, uint32_t timeoutMs) {
 }
 
 void sendLine(const String& line) {
-  link.print(line);
-  link.print('\n');
+  uartLink.print(line);
+  uartLink.print('\n');
 }
 
 void splitFields(const String& line, std::vector<String>& fields) {
@@ -60,11 +60,11 @@ void splitFields(const String& line, std::vector<String>& fields) {
 namespace comm {
 
 void initLink() {
-  link.begin(config::COMM_BAUD, SERIAL_8N1, config::COMM_RX_PIN,
-             config::COMM_TX_PIN);
-  link.setRxBufferSize(256);
-  link.setTimeout(5);
-  link.flush();
+  uartLink.begin(config::COMM_BAUD, SERIAL_8N1, config::COMM_RX_PIN,
+                 config::COMM_TX_PIN);
+  uartLink.setRxBufferSize(256);
+  uartLink.setTimeout(5);
+  uartLink.flush();
 #if defined(DEVICE_ROLE_HID)
   if (rpcMutex == nullptr) {
     rpcMutex = xSemaphoreCreateMutex();

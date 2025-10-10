@@ -60,10 +60,6 @@ void IRAM_ATTR handleEncoderPinA() {
   portEXIT_CRITICAL_ISR(&encoderMux);
 }
 
-void IRAM_ATTR handleEncoderPinA() {
-  handleEncoderEdge();
-}
-
 void IRAM_ATTR handleEncoderPinB() {
   portENTER_CRITICAL_ISR(&encoderMux);
   updateEncoderState();
