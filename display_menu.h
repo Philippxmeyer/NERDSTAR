@@ -1,5 +1,7 @@
 #pragma once
 
+#include "role_config.h"
+
 #if defined(DEVICE_ROLE_HID)
 
 #include <Arduino.h>
