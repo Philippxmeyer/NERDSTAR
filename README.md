@@ -96,7 +96,7 @@ und irgendwann sagen: „Lauf, kleiner ESP, lauf mit den Sternen.“
 
 #### Verbindung zwischen den beiden ESP32
 
-- **TX ↔ RX kreuzen:** Main-TX (GPIO 1) → HID-RX (GPIO 20) und Main-RX (GPIO 3) ← HID-TX (GPIO 21)
+- **TX ↔ RX kreuzen:** Main-TX (GPIO 33) → HID-RX (GPIO 20) und Main-RX (GPIO 32) ← HID-TX (GPIO 21)
 - **GND verbinden:** Gemeinsamer Bezugspunkt für UART und Sensoren
 - Optional: **5 V / 3.3 V** gemeinsam einspeisen, wenn beide Boards aus derselben Quelle versorgt werden
 - Hinweis: Während die Boards miteinander sprechen, ist derselbe UART auch am USB-Seriell-Wandler angebunden. Debug-Logs über USB funktionieren weiterhin, aber es werden alle Protokollnachrichten mitgeschnitten.
@@ -200,7 +200,7 @@ Kurz gesagt: Der ESP32 weiß, wohin es geht, und bleibt dank Tracking dort.
 3. Bibliotheken installieren (siehe oben)
 4. **HID-ESP32-C3** flashen (ohne zusätzliche Build-Flags)
 5. **Hauptrechner-ESP32** flashen (Build-Flag `-DDEVICE_ROLE_MAIN` setzen)
-6. UART kreuzen: Main-TX1 ↔ HID-RX20, Main-RX3 ↔ HID-TX21, GND verbinden
+6. UART kreuzen: Main-TX33 ↔ HID-RX20, Main-RX32 ↔ HID-TX21, GND verbinden
 7. Kaffee holen
 8. Freuen, dass du was gebaut hast, das klingt wie ein NASA-Projekt und aussieht wie ein Nerd-Traum.
 
