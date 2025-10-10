@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include "driver/uart.h"
 
 #include "role_config.h"
 
@@ -24,9 +25,10 @@ constexpr uint8_t STEP_DEC = 13;
 constexpr uint8_t UART_DEC_TX = 5;
 constexpr uint8_t UART_DEC_RX = 4;
 
-// Inter-board communication (UART0 default pins on classic ESP32)
-constexpr uint8_t COMM_TX_PIN = 1;
-constexpr uint8_t COMM_RX_PIN = 3;
+// Inter-board communication (UART1 on classic ESP32)
+constexpr uart_port_t COMM_UART_NUM = UART_NUM_1;
+constexpr uint8_t COMM_TX_PIN = 33;
+constexpr uint8_t COMM_RX_PIN = 32;
 
 #elif defined(DEVICE_ROLE_HID)
 
@@ -44,7 +46,8 @@ constexpr uint8_t ROT_BTN = 5;
 constexpr uint8_t SDA_PIN = 8;
 constexpr uint8_t SCL_PIN = 9;
 
-// Inter-board communication (UART0 default pins on ESP32-C3)
+// Inter-board communication (UART1 on ESP32-C3)
+constexpr uart_port_t COMM_UART_NUM = UART_NUM_1;
 constexpr uint8_t COMM_TX_PIN = 21;
 constexpr uint8_t COMM_RX_PIN = 20;
 
@@ -52,7 +55,7 @@ constexpr uint8_t COMM_RX_PIN = 20;
 #error "Unsupported device role"
 #endif
 
-constexpr uint32_t COMM_BAUDRATE = 115200;
+constexpr uint32_t COMM_BAUD = 115200;
 constexpr uint32_t COMM_RESPONSE_TIMEOUT_MS = 200;
 
 // Driver configuration

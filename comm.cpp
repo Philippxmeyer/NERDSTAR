@@ -1,5 +1,6 @@
 #include "comm.h"
 
+#include <HardwareSerial.h>
 #include <algorithm>
 
 #if defined(DEVICE_ROLE_HID)
@@ -9,7 +10,7 @@
 
 namespace {
 
-HardwareSerial& link = Serial;
+HardwareSerial link(static_cast<int>(config::COMM_UART_NUM));
 uint16_t nextRequestId = 1;
 #if defined(DEVICE_ROLE_HID)
 SemaphoreHandle_t rpcMutex = nullptr;
@@ -59,8 +60,10 @@ void splitFields(const String& line, std::vector<String>& fields) {
 namespace comm {
 
 void initLink() {
-  link.begin(config::COMM_BAUDRATE, SERIAL_8N1, config::COMM_RX_PIN,
+  link.begin(config::COMM_BAUD, SERIAL_8N1, config::COMM_RX_PIN,
              config::COMM_TX_PIN);
+  link.setRxBufferSize(256);
+  link.setTimeout(5);
   link.flush();
 #if defined(DEVICE_ROLE_HID)
   if (rpcMutex == nullptr) {
