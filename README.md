@@ -52,8 +52,8 @@ und irgendwann sagen: „Lauf, kleiner ESP, lauf mit den Sternen.“
 
 | Komponente             | Aufgabe                             | Pins / Anschlüsse                     |
 | ---------------------- | ----------------------------------- | ------------------------------------- |
-| **ESP32 (Hauptrechner)** | Kursberechnung + Motorsteuerung      | UART0 TX (1) ↔ HID-RX, UART0 RX (3) ↔ HID-TX |
-| **ESP32-C3 (HID)**     | Display, Eingaben, EEPROM-Katalog    | UART0 TX (21) ↔ Main-RX, UART0 RX (20) ↔ Main-TX |
+| **ESP32 (Hauptrechner)** | Kursberechnung + Motorsteuerung      | UART1 TX (33) ↔ HID-RX, UART1 RX (32) ↔ HID-TX |
+| **ESP32-C3 (HID)**     | Display, Eingaben, EEPROM-Katalog    | UART1 TX (21) ↔ Main-RX, UART1 RX (20) ↔ Main-TX |
 | **TMC2209 (RA)**       | Dreht um die Rektaszensions-Achse   | STEP 25, DIR 26, EN 27, UART TX/RX = 17/16 |
 | **TMC2209 (DEC)**      | Dreht um die Deklinations-Achse     | STEP 13, DIR 12, EN 14, UART TX/RX = 5/4 |
 | **OLED (SSD1306)**     | Zeigt alles an, außer Mitleid       | I²C: SDA 8, SCL 9 (HID-ESP32-C3)      |
@@ -96,9 +96,10 @@ und irgendwann sagen: „Lauf, kleiner ESP, lauf mit den Sternen.“
 
 #### Verbindung zwischen den beiden ESP32
 
-- **TX ↔ RX kreuzen:** Main-TX (GPIO 1) → HID-RX (GPIO 20) und Main-RX (GPIO 3) ← HID-TX (GPIO 21)
+- **TX ↔ RX kreuzen:** Main-TX (GPIO 33) → HID-RX (GPIO 20) und Main-RX (GPIO 32) ← HID-TX (GPIO 21)
 - **GND verbinden:** Gemeinsamer Bezugspunkt für UART und Sensoren
 - Optional: **5 V / 3.3 V** gemeinsam einspeisen, wenn beide Boards aus derselben Quelle versorgt werden
+- USB bleibt frei: Beide Boards können weiterhin über ihren USB-Port debuggt bzw. mit Logausgaben versorgt werden.
 
 Diese Belegung entspricht exakt den Konstanten in [`config.h`](config.h) und stellt sicher, dass jede Komponente am richtigen Controller hängt.
 
@@ -138,10 +139,10 @@ NERDSTAR/
   Schrittmotoren, startet zwei Tasks (Core 0 = Kursberechnung & Protokoll,
   Core 1 = Motorsteuerung) und beantwortet alle Motion-RPCs.
 
-Beide Varianten verwenden UART0 als galvanische Verbindung: Beim
-Hauptrechner liegen die Leitungen auf **TX1/RX3**, die HID-Variante mit dem
-ESP32-C3 SuperMini nutzt **TX21/RX20**. Der USB-Seriell-Port des jeweiligen
-Boards steht dadurch nicht gleichzeitig zur Verfügung.
+Beide Varianten verwenden nun **UART1** für die Verbindung: Beim Hauptrechner
+laufen die Leitungen über **TX33/RX32**, die HID-Variante mit dem ESP32-C3
+SuperMini nutzt **TX21/RX20**. Damit bleibt der jeweilige USB-Seriell-Port für
+Debugging und Logausgaben frei.
 
 ---
 
@@ -200,7 +201,7 @@ Kurz gesagt: Der ESP32 weiß, wohin es geht, und bleibt dank Tracking dort.
 3. Bibliotheken installieren (siehe oben)
 4. **HID-ESP32-C3** flashen (ohne zusätzliche Build-Flags)
 5. **Hauptrechner-ESP32** flashen (Build-Flag `-DDEVICE_ROLE_MAIN` setzen)
-6. UART kreuzen: Main-TX1 ↔ HID-RX20, Main-RX3 ↔ HID-TX21, GND verbinden
+6. UART kreuzen: Main-TX33 ↔ HID-RX20, Main-RX32 ↔ HID-TX21, GND verbinden
 7. Kaffee holen
 8. Freuen, dass du was gebaut hast, das klingt wie ein NASA-Projekt und aussieht wie ein Nerd-Traum.
 

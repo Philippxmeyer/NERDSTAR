@@ -21,8 +21,9 @@ Diese Anleitung führt dich Schritt für Schritt durch Inbetriebnahme und Bedien
      - Rotary-Encoder: A 3, B 4, Button 5
      - Joystick: VRx 0, VRy 1, Button 6
    - **ESP32 ↔ ESP32-C3 (UART-Link)**
-     - Main-TX (1) → HID-RX (20), Main-RX (3) ← HID-TX (21)
+     - Main-TX (33) → HID-RX (20), Main-RX (32) ← HID-TX (21)
      - Gemeinsame Masse verbinden (GND ↔ GND)
+     - USB-Ports bleiben für Debug-Log (Serial) frei, weil die Boards nicht mehr den internen USB-UART verwenden.
 4. **Firmware flashen**
    - Bibliotheken installieren (`TMCStepper`, `Adafruit_SSD1306`, `Adafruit_GFX`, `RTClib`)
    - Sketch `NERDSTAR.ino` mit den neuen Modulen kompilieren und auf die Boards flashen (HID: Board `ESP32C3 Dev Module`, Main: `ESP32 Dev Module`).
