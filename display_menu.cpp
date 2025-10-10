@@ -197,6 +197,7 @@ void setUiState(UiState state) {
 }
 
 void abortGoto();
+bool startGotoToCoordinates(double raHours, double decDegrees, const String& label);
 
 void drawHeader() {
   display.setTextColor(SSD1306_WHITE);
@@ -861,8 +862,9 @@ void handleLocationInput(int delta) {
         break;
       case 2: {
         int stepMinutes = delta * 15;
+        int32_t newTimezone = locationEdit.timezoneMinutes + stepMinutes;
         locationEdit.timezoneMinutes =
-            std::clamp(locationEdit.timezoneMinutes + stepMinutes, -720, 840);
+            std::clamp<int32_t>(newTimezone, -720, 840);
         break;
       }
     }

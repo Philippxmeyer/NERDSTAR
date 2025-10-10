@@ -25,10 +25,11 @@ constexpr uint8_t JOY_X = 34;
 constexpr uint8_t JOY_Y = 35;
 constexpr uint8_t JOY_BTN = 32; // LOW active
 
-// Rotary encoder pins
-constexpr uint8_t ROT_A = 23;
-constexpr uint8_t ROT_B = 19;
-constexpr uint8_t ROT_BTN = 18;
+// Rotary encoder pins  (weg von VSPI!)
+constexpr uint8_t ROT_A   = 36; // SENSOR_VP, input-only, ext. Pullup nötig wenn "nackter" Encoder
+constexpr uint8_t ROT_B   = 39; // SENSOR_VN, input-only, ext. Pullup nötig wenn "nackter" Encoder
+constexpr uint8_t ROT_BTN = 33; // mit INPUT_PULLUP betreiben
+
 
 // OLED + RTC I2C pins
 constexpr uint8_t SDA_PIN = 21;
@@ -36,6 +37,12 @@ constexpr uint8_t SCL_PIN = 22;
 
 // SD card chip select
 constexpr uint8_t SD_CS_PIN = 15;
+
+// SD card SPI pins/frequency (VSPI default)
+constexpr uint8_t SD_SCK_PIN = 18;
+constexpr uint8_t SD_MISO_PIN = 19;
+constexpr uint8_t SD_MOSI_PIN = 23;
+constexpr uint32_t SD_SPI_FREQUENCY_HZ = 8000000;
 
 // SD card initialization behavior
 constexpr uint32_t SD_INIT_TIMEOUT_MS = 1500;

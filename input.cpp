@@ -3,6 +3,7 @@
 #if defined(DEVICE_ROLE_HID)
 
 #include <math.h>
+#include <stdint.h>
 
 #include "config.h"
 
@@ -14,6 +15,17 @@ volatile uint8_t encoderState = 0;
 volatile int8_t encoderStepAccumulator = 0;
 volatile bool encoderClick = false;
 volatile bool joystickClick = false;
+volatile uint32_t lastEncoderEdgeUs = 0;
+
+constexpr uint32_t ENCODER_DEBOUNCE_US = 250;
+constexpr int kEncoderStepsPerNotch = 4;
+
+constexpr int8_t kTransitionTable[4][4] = {
+    {0, -1, 1, 0},
+    {1, 0, 0, -1},
+    {-1, 0, 0, 1},
+    {0, 1, -1, 0},
+};
 
 JoystickCalibration currentCalibration{2048, 2048};
 bool lastJoystickState = false;
@@ -46,6 +58,10 @@ void IRAM_ATTR handleEncoderPinA() {
   portENTER_CRITICAL_ISR(&encoderMux);
   updateEncoderState();
   portEXIT_CRITICAL_ISR(&encoderMux);
+}
+
+void IRAM_ATTR handleEncoderPinA() {
+  handleEncoderEdge();
 }
 
 void IRAM_ATTR handleEncoderPinB() {
