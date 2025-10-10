@@ -21,6 +21,15 @@ struct SystemConfig {
 
 namespace storage {
 
+struct __attribute__((packed)) CatalogEntry {
+  uint16_t nameOffset;
+  uint8_t nameLength;
+  uint8_t typeIndex;
+  uint16_t raHoursTimes1000;
+  int16_t decDegreesTimes100;
+  int8_t magnitudeTimes10;
+};
+
 bool init();
 const SystemConfig& getConfig();
 void setJoystickCalibration(const JoystickCalibration& calibration);
@@ -31,7 +40,9 @@ void setPolarAligned(bool aligned);
 void setRtcEpoch(uint32_t epoch);
 void setObserverLocation(double latitudeDeg, double longitudeDeg, int32_t timezoneMinutes);
 void save();
-bool isSdAvailable();
+size_t getCatalogEntryCount();
+bool readCatalogEntry(size_t index, CatalogEntry& entry);
+bool readCatalogName(uint16_t offset, uint8_t length, char* buffer, size_t bufferSize);
 
 }  // namespace storage
 

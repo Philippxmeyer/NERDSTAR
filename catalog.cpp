@@ -1,80 +1,22 @@
 #include "catalog.h"
 
-#include <SD.h>
 #include <vector>
 
+#include "storage.h"
 #include "text_utils.h"
 
 namespace {
 
 std::vector<CatalogObject> catalogObjects;
-bool loaded = false;
 
-String readLine(File& file) {
-  return file.readStringUntil('\n');
-}
+constexpr const char* kTypeNames[] = {
+    "Planet", "Moon", "Star", "Cluster", "Double Star", "Galaxy", "Nebula", "Planetary Nebula"};
 
-String readAttribute(const String& element, const char* attribute) {
-  String pattern = String(attribute) + "=\"";
-  int start = element.indexOf(pattern);
-  if (start < 0) {
-    return String();
+const char* resolveTypeName(uint8_t index) {
+  if (index >= sizeof(kTypeNames) / sizeof(kTypeNames[0])) {
+    return "Unknown";
   }
-  start += pattern.length();
-  int end = element.indexOf('"', start);
-  if (end < 0) {
-    return String();
-  }
-  return element.substring(start, end);
-}
-
-bool parseObjectElement(const String& line, CatalogObject& object) {
-  if (!line.startsWith("<object") || !line.endsWith("/>")) {
-    return false;
-  }
-
-  String name = readAttribute(line, "name");
-  String type = readAttribute(line, "type");
-  String ra = readAttribute(line, "ra_hours");
-  String dec = readAttribute(line, "dec_degrees");
-  String mag = readAttribute(line, "magnitude");
-
-  if (name.isEmpty() || type.isEmpty() || ra.isEmpty() || dec.isEmpty() || mag.isEmpty()) {
-    return false;
-  }
-
-  object.name = sanitizeForDisplay(name);
-  object.type = sanitizeForDisplay(type);
-  object.raHours = ra.toFloat();
-  object.decDegrees = dec.toFloat();
-  object.magnitude = mag.toFloat();
-  return true;
-}
-
-bool loadCatalog() {
-  File file = SD.open("/catalog.xml", FILE_READ);
-  if (!file) {
-    return false;
-  }
-
-  catalogObjects.clear();
-  while (file.available()) {
-    String line = readLine(file);
-    line.trim();
-    if (line.isEmpty()) {
-      continue;
-    }
-    if (!line.startsWith("<object")) {
-      continue;
-    }
-    CatalogObject obj;
-    if (parseObjectElement(line, obj)) {
-      catalogObjects.push_back(obj);
-    }
-  }
-  file.close();
-  loaded = !catalogObjects.empty();
-  return loaded;
+  return kTypeNames[index];
 }
 
 }  // namespace
@@ -82,8 +24,28 @@ bool loadCatalog() {
 namespace catalog {
 
 bool init() {
-  loaded = loadCatalog();
-  return loaded;
+  catalogObjects.clear();
+  size_t count = storage::getCatalogEntryCount();
+  catalogObjects.reserve(count);
+  for (size_t i = 0; i < count; ++i) {
+    storage::CatalogEntry entry{};
+    if (!storage::readCatalogEntry(i, entry)) {
+      continue;
+    }
+    char nameBuffer[32];
+    if (!storage::readCatalogName(entry.nameOffset, entry.nameLength, nameBuffer, sizeof(nameBuffer))) {
+      continue;
+    }
+
+    CatalogObject object;
+    object.name = sanitizeForDisplay(String(nameBuffer));
+    object.type = sanitizeForDisplay(String(resolveTypeName(entry.typeIndex)));
+    object.raHours = static_cast<double>(entry.raHoursTimes1000) / 1000.0;
+    object.decDegrees = static_cast<double>(entry.decDegreesTimes100) / 100.0;
+    object.magnitude = static_cast<double>(entry.magnitudeTimes10) / 10.0;
+    catalogObjects.push_back(std::move(object));
+  }
+  return !catalogObjects.empty();
 }
 
 size_t size() { return catalogObjects.size(); }
@@ -106,4 +68,3 @@ const CatalogObject* findByName(const String& name) {
 }
 
 }  // namespace catalog
-

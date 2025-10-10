@@ -25,15 +25,15 @@ und ein Hauch Größenwahn ergeben zusammen ein
 | ----------------------------- | ---------------------------------------------------------------------------- |
 | 🔭 **Dual Axis Control**      | Zwei Achsen (RA & DEC) mit unabhängigen µs-Hardware-Timern                  |
 | 🔹 **Joystick Navigation**    | Joystick für manuelles Slewen, Encoder für Menüs                            |
-| 🧭 **Goto & Catalog**         | Objektbibliothek auf SD, Auswahl per Encoder, automatisches Goto             |
-| 💾 **SD-Objektbibliothek**    | 200 vorkonfigurierte Sterne/Nebel/Galaxien/Planeten als CSV, automatisch geladen |
+| 🧭 **Goto & Catalog**         | Objektbibliothek direkt aus dem EEPROM, Auswahl per Encoder, automatisches Goto |
+| 💾 **EEPROM-Katalog**         | 200 vorkonfigurierte Sterne/Nebel/Galaxien/Planeten, beim Start automatisch geladen |
 | 🕒 **RTC DS3231**             | Uhrzeit via Setup-Menü setzen, Grundlage für Planetenpositionen             |
 | 🪐 **Planetenberechnung**     | Schlanker Algorithmus liefert aktuelle RA/Dec für klassische Planeten       |
 | 🔧 **Setup & Kalibrierung**   | Menü für RTC-Zeit, Joystick-Zentrum, Achsenkalibrierung & EEPROM-Speicher   |
 | 📺 **OLED Status Display**    | Zeigt RA/Dec, Tracking-/Goto-Status und gewähltes Ziel                      |
 | ⚙️ **µs-Timersteuerung**      | Stepper laufen so gleichmäßig, dass man sie fast atmen hört                |
 | 🧠 **ESP32 Dual-Core**        | Hauptrechner: Core 1 steuert die Motoren, Core 0 berechnet Kurs & Protokoll |
-| 🔌 **Zwei ESP32**             | Zweiter ESP32 kümmert sich ausschließlich um HID (Display, Joystick, SD)     |
+| 🔌 **Zwei ESP32**             | Zweiter ESP32 kümmert sich ausschließlich um HID (Display, Joystick, Persistenz) |
 
 ---
 
@@ -53,14 +53,13 @@ und irgendwann sagen: „Lauf, kleiner ESP, lauf mit den Sternen.“
 | Komponente             | Aufgabe                             | Pins / Anschlüsse                     |
 | ---------------------- | ----------------------------------- | ------------------------------------- |
 | **ESP32 (Hauptrechner)** | Kursberechnung + Motorsteuerung      | UART0 TX (1) ↔ HID-RX, UART0 RX (3) ↔ HID-TX |
-| **ESP32 (HID)**        | Display, Eingaben, SD                | UART0 TX (1) ↔ Main-RX, UART0 RX (3) ↔ Main-TX |
+| **ESP32 (HID)**        | Display, Eingaben, EEPROM-Katalog    | UART0 TX (1) ↔ Main-RX, UART0 RX (3) ↔ Main-TX |
 | **TMC2209 (RA)**       | Dreht um die Rektaszensions-Achse   | STEP 25, DIR 26, EN 27, UART TX/RX = 17/16 |
 | **TMC2209 (DEC)**      | Dreht um die Deklinations-Achse     | STEP 13, DIR 12, EN 14, UART TX/RX = 5/4 |
 | **OLED (SSD1306)**     | Zeigt alles an, außer Mitleid       | I²C: SDA 21, SCL 22 (HID-ESP32)       |
 | **RTC (DS3231)**       | Sagt dir, wann du’s verpasst hast   | I²C: SDA 21, SCL 22 (HID-ESP32)       |
 | **Joystick (KY-023)**  | Steuert alles intuitiv falsch herum | VRx 34, VRy 35, SW 32 (HID-ESP32)     |
-| **Rotary-Encoder**     | Menü & Bestätigungen                | A = 23, B = 19, Button = 18 (HID-ESP32) |
-| **SD-Karte (VSPI)**    | Bibliothek mit Lieblingsobjekten    | CS 15, MOSI 23, MISO 19, SCK 18 (HID-ESP32) |
+| **Rotary-Encoder**     | Menü & Bestätigungen                | A = 36, B = 39, Button = 33 (HID-ESP32) |
 
 ### 🔌 Verkabelung im Detail
 
@@ -87,10 +86,9 @@ und irgendwann sagen: „Lauf, kleiner ESP, lauf mit den Sternen.“
 | -------------------------------- | ------------------ | --------- |
 | OLED + RTC SDA                   | 21                 | Gemeinsamer I²C-Bus |
 | OLED + RTC SCL                   | 22                 | Gemeinsamer I²C-Bus |
-| SD-Karte CS                      | 15                 | Weitere SPI-Leitungen VSPI-Default (MOSI 23, MISO 19, SCK 18) |
-| Rotary-Encoder A                 | 23                 | Achtung: teilt sich Leitung mit SPI-MOSI → Pullups nahe am Encoder verwenden |
-| Rotary-Encoder B                 | 19                 | Teilt sich Leitung mit SPI-MISO |
-| Rotary-Encoder Button            | 18                 | Ebenfalls SPI-SCK-Leitung, wird intern entprellt |
+| Rotary-Encoder A                 | 36                 | Dedizierter Eingang, externer Pullup empfohlen |
+| Rotary-Encoder B                 | 39                 | Dedizierter Eingang, externer Pullup empfohlen |
+| Rotary-Encoder Button            | 33                 | Mit INPUT_PULLUP betreiben |
 | Joystick X (VRx)                 | 34                 | ADC, high impedance |
 | Joystick Y (VRy)                 | 35                 | ADC |
 | Joystick Button                  | 32                 | LOW-aktiv |
@@ -112,16 +110,16 @@ Diese Belegung entspricht exakt den Konstanten in [`config.h`](config.h) und ste
 NERDSTAR/
 │
 ├── NERDSTAR.ino           # Orchestriert Setup/Loop
-├── catalog.cpp/.h         # SD-Objektbibliothek & Parser
+├── catalog.cpp/.h         # EEPROM-Katalog & Parser
 ├── display_menu.cpp/.h    # OLED-Menüs, Setup, Goto, Polar Align
 ├── input.cpp/.h           # Joystick + Encoder Handling
 ├── motion_main.cpp/.h     # Stepper-Steuerung & Kursberechnung (Hauptrechner)
 ├── motion_hid.cpp         # RPC-Proxy für Motion-Funktionen (HID)
 ├── comm.cpp/.h            # UART-Protokoll zwischen Hauptrechner und HID
 ├── planets.cpp/.h         # Schlanke Planeten-Ephemeriden
-├── storage.cpp/.h         # EEPROM & SD Initialisierung
+├── storage.cpp/.h         # EEPROM-Konfiguration & Katalogspeicher
 ├── config.h               # Pinout & Konstanten
-├── data/catalog.xml       # Beispiel-Datenbank für die SD-Karte
+├── data/catalog.xml       # Quellliste für den eingebauten Katalog
 ├── docs/
 │   ├── BEDIENUNGSANLEITUNG.md # Schritt-für-Schritt-Bedienung
 │   └── nerdstar-banner.png    # Für die Optik
@@ -134,7 +132,7 @@ NERDSTAR/
 ### Firmware-Varianten
 
 - **HID-Firmware (Standard)**: Ohne zusätzliche Defines kompilieren. Baut das
-  UI für Display, Joystick, SD und spricht den Hauptrechner per UART an.
+  UI für Display, Joystick, Katalog und spricht den Hauptrechner per UART an.
 - **Hauptrechner-Firmware**: In den Compiler-Optionen `DEVICE_ROLE_MAIN`
   definieren (z.B. `-DDEVICE_ROLE_MAIN`). Der Code initialisiert die
   Schrittmotoren, startet zwei Tasks (Core 0 = Kursberechnung & Protokoll,
@@ -149,7 +147,7 @@ zur Verfügung.
 ## 📖 Dokumentation & Daten
 
 - [Bedienungsanleitung](docs/BEDIENUNGSANLEITUNG.md) mit Schritt-für-Schritt-Anweisungen
-- Beispiel-Datenbank: [`data/catalog.xml`](data/catalog.xml) – auf die SD-Karte kopieren
+- Beispiel-Datenbank: [`data/catalog.xml`](data/catalog.xml) – dient als Quelle für den eingebauten EEPROM-Katalog
 - Alle Kalibrierungen & Zustände werden im EEPROM des ESP32 abgelegt
 
 ---
@@ -189,7 +187,6 @@ Kurz gesagt: Der ESP32 weiß, wohin es geht, und bleibt dank Tracking dort.
 | `Adafruit_SSD1306` | OLED-Anzeige                       | ≥ 2.5.9            |
 | `Adafruit_GFX`     | Grafik-Backend                     | ≥ 1.11.9           |
 | `RTClib`           | DS3231 RTC                         | ≥ 2.1.3            |
-| `SD`               | Zugriff auf die Objektbibliothek   | Arduino Core       |
 
 ---
 

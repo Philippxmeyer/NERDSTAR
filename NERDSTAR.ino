@@ -19,12 +19,10 @@ void setup() {
 
   storage::init();
   systemState.polarAligned = storage::getConfig().polarAligned;
-  systemState.sdAvailable = storage::isSdAvailable();
   systemState.selectedCatalogIndex = -1;
 
   display_menu::init();
   display_menu::showBootMessage();
-  display_menu::setSdAvailable(systemState.sdAvailable);
 
   input::init();
   if (storage::getConfig().joystickCalibrated) {
@@ -43,12 +41,8 @@ void setup() {
   display_menu::showReady();
   display_menu::startTask();
 
-  if (systemState.sdAvailable) {
-    if (!catalog::init()) {
-      systemState.sdAvailable = false;
-      display_menu::setSdAvailable(false);
-      display_menu::showInfo("Catalog missing", 2000);
-    }
+  if (!catalog::init()) {
+    display_menu::showInfo("Catalog missing", 2000);
   }
 }
 

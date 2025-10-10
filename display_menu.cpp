@@ -26,7 +26,6 @@ namespace {
 Adafruit_SSD1306 display(config::OLED_WIDTH, config::OLED_HEIGHT, &Wire, -1);
 RTC_DS3231 rtc;
 bool rtcAvailable = false;
-bool sdAvailable = false;
 
 enum class UiState {
   StatusScreen,
@@ -648,7 +647,7 @@ void drawCatalog() {
   display.print("Catalog");
   if (catalog::size() == 0) {
     display.setCursor(0, 20);
-    display.print(sdAvailable ? "No entries" : "SD missing");
+    display.print("No entries");
     return;
   }
   if (catalogIndex < 0) catalogIndex = 0;
@@ -1658,7 +1657,7 @@ void handleMainMenuInput(int delta) {
       showInfo("Tracking off");
       break;
     case 4:
-      if (!sdAvailable || catalog::size() == 0) {
+      if (catalog::size() == 0) {
         showInfo("Catalog missing");
       } else {
         catalogIndex = systemState.selectedCatalogIndex;
@@ -1837,8 +1836,6 @@ void init() {
     showInfo("RTC missing", 2000);
   }
 }
-
-void setSdAvailable(bool available) { sdAvailable = available; }
 
 void showBootMessage() {
   display.clearDisplay();

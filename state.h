@@ -14,7 +14,6 @@ struct SystemState {
   MenuMode menuMode;
   bool polarAligned;
   bool trackingActive;
-  bool sdAvailable;
   bool gotoActive;
   int selectedCatalogIndex;
   int64_t azGotoTarget;
