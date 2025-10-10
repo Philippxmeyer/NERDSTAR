@@ -11,7 +11,12 @@ Diese Anleitung führt dich Schritt für Schritt durch Inbetriebnahme und Bedien
 2. **Katalog**
    - Der komplette Objektkatalog liegt fest im EEPROM. Eine SD-Karte ist nicht mehr erforderlich.
    - Anpassungen erfolgen über [`data/catalog.xml`](../data/catalog.xml); anschließend muss die Firmware neu gebaut werden.
-3. **Verdrahtung gemäß Pinbelegung**
+   - Beim Bauen entsteht daraus `catalog_data.inc`, das in die HID-Firmware eingebettet wird. Beim ersten Start schreibt die Firmware den Katalog automatisch in den emulierten EEPROM-Bereich des ESP32 (4 KB Flash). Dort bleibt er auch nach Firmware-Updates erhalten.
+3. **Geräterolle wählen**
+   - In [`role_config.h`](../role_config.h) wird gesteuert, welche Variante kompiliert wird. Standardmäßig ist `DEVICE_ROLE_HID` aktiv.
+   - Für das Hauptsteuerungs-Board beim Kompilieren den Define `DEVICE_ROLE_MAIN` setzen (z. B. `arduino-cli compile --build-property build.extra_flags=-DDEVICE_ROLE_MAIN`). Alternativ kann der Define temporär vor dem `#include "role_config.h"` in `NERDSTAR.ino` ergänzt werden.
+   - Nach dem Flashen der Main-Firmware wieder den HID-Build ohne zusätzliche Defines kompilieren, um die HID-Einheit zu aktualisieren.
+4. **Verdrahtung gemäß Pinbelegung**
    - **ESP32 (Hauptrechner)** → Steppertreiber
      - RA-Treiber: STEP 25, DIR 26, EN 27, UART TX 17 → PDN/UART, UART RX 16 ← PDN/UART
      - DEC-Treiber: STEP 13, DIR 12, EN 14, UART TX 5 → PDN/UART, UART RX 4 ← PDN/UART
@@ -21,9 +26,10 @@ Diese Anleitung führt dich Schritt für Schritt durch Inbetriebnahme und Bedien
      - Rotary-Encoder: A 3, B 4, Button 5
      - Joystick: VRx 0, VRy 1, Button 6
    - **ESP32 ↔ ESP32-C3 (UART-Link)**
-     - Main-TX (1) → HID-RX (20), Main-RX (3) ← HID-TX (21)
+     - Main-TX (33) → HID-RX (20), Main-RX (32) ← HID-TX (21)
      - Gemeinsame Masse verbinden (GND ↔ GND)
-4. **Firmware flashen**
+     - USB-Ports bleiben für Debug-Log (Serial) frei, weil die Boards nicht mehr den internen USB-UART verwenden.
+5. **Firmware flashen**
    - Bibliotheken installieren (`TMCStepper`, `Adafruit_SSD1306`, `Adafruit_GFX`, `RTClib`)
    - Sketch `NERDSTAR.ino` mit den neuen Modulen kompilieren und auf die Boards flashen (HID: Board `ESP32C3 Dev Module`, Main: `ESP32 Dev Module`).
 
