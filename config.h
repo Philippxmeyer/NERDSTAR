@@ -36,6 +36,12 @@ constexpr uint8_t SCL_PIN = 22;
 // SD card chip select
 constexpr uint8_t SD_CS_PIN = 15;
 
+// SD card SPI pins/frequency (VSPI default)
+constexpr uint8_t SD_SCK_PIN = 18;
+constexpr uint8_t SD_MISO_PIN = 19;
+constexpr uint8_t SD_MOSI_PIN = 23;
+constexpr uint32_t SD_SPI_FREQUENCY_HZ = 8000000;
+
 // SD card initialization behavior
 constexpr uint32_t SD_INIT_TIMEOUT_MS = 1500;
 constexpr uint16_t SD_INIT_RETRY_DELAY_MS = 100;
