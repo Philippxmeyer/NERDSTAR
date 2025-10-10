@@ -72,6 +72,11 @@ constexpr float JOYSTICK_DEADZONE = 0.05f;
 constexpr uint8_t OLED_WIDTH = 128;
 constexpr uint8_t OLED_HEIGHT = 64;
 
+// WiFi / OTA configuration
+constexpr const char* WIFI_AP_SSID_PREFIX = "NERDSTAR";
+constexpr const char* WIFI_AP_PASSWORD = "nerdstar";
+constexpr const char* WIFI_HOSTNAME_PREFIX = "nerdstar";
+
 // Astronomy constants
 constexpr double SIDEREAL_DAY_SECONDS = 86164.0905;
 constexpr double POLARIS_RA_HOURS = 2.530301;     // 02h 31m 49s
