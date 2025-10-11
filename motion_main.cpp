@@ -6,6 +6,7 @@
 #include <cmath>
 #include <limits>
 
+#include <HardwareSerial.h>
 #include <TMCStepper.h>
 #include <esp32-hal-gpio.h>
 #include <esp_rom_sys.h>
@@ -75,7 +76,8 @@ BacklashConfig backlash{0, 0};
 portMUX_TYPE trackingMux = portMUX_INITIALIZER_UNLOCKED;
 bool trackingEnabled = false;
 
-TMC2209Stepper driverAz(&Serial2, config::R_SENSE, config::DRIVER_ADDR_RA);
+HardwareSerial driverAzSerial(2);
+TMC2209Stepper driverAz(&driverAzSerial, config::R_SENSE, config::DRIVER_ADDR_RA);
 TMC2209Stepper driverAlt(&Serial1, config::R_SENSE, config::DRIVER_ADDR_DEC);
 
 AxisState& getAxisState(Axis axis) {
@@ -234,7 +236,7 @@ void init() {
   digitalWrite(axisAz.stepPin, LOW);
   digitalWrite(axisAlt.stepPin, LOW);
 
-  Serial2.begin(115200, SERIAL_8N1, config::UART_RA_RX, config::UART_RA_TX);
+  driverAzSerial.begin(115200, SERIAL_8N1, config::UART_RA_RX, config::UART_RA_TX);
   Serial1.begin(115200, SERIAL_8N1, config::UART_DEC_RX, config::UART_DEC_TX);
 
   configureDriver(driverAz);
