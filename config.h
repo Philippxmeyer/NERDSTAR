@@ -35,7 +35,7 @@ constexpr uint8_t COMM_RX_PIN = 32;
 // Joystick KY-023 pins (ESP32-C3 SuperMini)
 constexpr uint8_t JOY_X = 0;
 constexpr uint8_t JOY_Y = 1;
-constexpr uint8_t JOY_BTN = 6;  // LOW active
+constexpr uint8_t JOY_BTN = 7;  // LOW active, use external pull-up if module lacks one
 
 // Rotary encoder pins (ESP32-C3 SuperMini)
 constexpr uint8_t ROT_A = 3;

@@ -24,7 +24,7 @@ Diese Anleitung führt dich Schritt für Schritt durch Inbetriebnahme und Bedien
    - **ESP32-C3 (HID)** → Eingabe- & Anzeigeeinheit
      - OLED & RTC: SDA 8 / SCL 9 (I²C, 3.3 V/GND)
      - Rotary-Encoder: A 3, B 4, Button 5
-     - Joystick: VRx 0, VRy 1, Button 6
+    - Joystick: VRx 0, VRy 1, Button 7 (LOW-aktiv, bei Bedarf externen Pull-up auf 3.3 V ergänzen)
    - **ESP32 ↔ ESP32-C3 (UART-Link)**
      - Main-TX (33) → HID-RX (20), Main-RX (32) ← HID-TX (21)
      - Gemeinsame Masse verbinden (GND ↔ GND)
@@ -57,11 +57,11 @@ Diese Anleitung führt dich Schritt für Schritt durch Inbetriebnahme und Bedien
 
 | Menüpunkt        | Funktion                                                                                   |
 | ---------------- | ------------------------------------------------------------------------------------------- |
-| Status           | Zeigt RA/Dec, Align-/Tracking-Status und ausgewähltes Ziel                                  |
+| Status           | Zeigt RA/Dec, Align-/Tracking-Status, gewähltes Ziel sowie Joystick- und Linkdiagnose       |
 | Polar Align      | Führt durch die Polaris-Ausrichtung. Encoder drücken = bestätigen, Joystick drücken = Abbruch |
 | Start Tracking   | Aktiviert siderische Nachführung (nur nach erfolgreicher Ausrichtung)                       |
 | Stop Tracking    | Stoppt die Nachführung                                                                      |
-| Catalog          | Blättert durch alle Objekte; Encoder = sofortiges Goto, Joystick = zurück                      |
+| Catalog          | Erst Kategorie wählen (z.B. Planet/Stern), dann Objekt blättern; Encoder = Goto, Joystick = zurück zur Kategorie |
 | Goto Selected    | Startet die automatische Bewegung zum zuletzt gemerkten Objekt (siehe Abschnitt 6)          |
 | Setup            | Öffnet das Setup-Menü                                                                       |
 
@@ -102,12 +102,13 @@ Diese Anleitung führt dich Schritt für Schritt durch Inbetriebnahme und Bedien
 
 ## 6. Katalog und Goto
 
-1. `Catalog` öffnen, mit dem Encoder durch die Liste blättern.
-2. Encoder drücken startet unmittelbar ein Goto zum angezeigten Objekt. Die Software plant die Ankunftszeit vor, damit Zielkoordinaten zum Ende der Fahrt stimmen.
-3. Ziele unter dem Horizont werden automatisch blockiert (Anzeige "Below horizon").
-4. Während eines Goto ist Tracking deaktiviert; Joystick-Taste bricht jederzeit ab.
-5. Nach Abschluss erscheinen "Goto done" und die Nachführung wird automatisch mit dem Ziel als Referenz aktiviert.
-6. Im Hauptmenü kann `Goto Selected` genutzt werden, um das zuletzt gewählte Objekt erneut anzufahren.
+1. `Catalog` öffnen, mit dem Encoder zuerst die gewünschte Kategorie (z.B. Planet, Stern, Nebel) wählen.
+2. Encoder drücken öffnet die Objektliste der Kategorie; dort mit dem Encoder blättern.
+3. Encoder drücken startet unmittelbar ein Goto zum angezeigten Objekt. Die Software plant die Ankunftszeit vor, damit Zielkoordinaten zum Ende der Fahrt stimmen.
+4. Ziele unter dem Horizont werden automatisch blockiert (Anzeige "Below horizon").
+5. Während eines Goto ist Tracking deaktiviert; Joystick-Taste bricht jederzeit ab.
+6. Nach Abschluss erscheinen "Goto done" und die Nachführung wird automatisch mit dem Ziel als Referenz aktiviert.
+7. Im Hauptmenü kann `Goto Selected` genutzt werden, um das zuletzt gewählte Objekt erneut anzufahren.
 
 **Planeten**: Für Objekte mit Typ `Planet` wird die RA/Dec über die eingebaute Planetenberechnung (basierend auf Julianischem Datum) bestimmt. Voraussetzung: RTC läuft.
 

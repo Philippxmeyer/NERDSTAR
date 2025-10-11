@@ -36,6 +36,7 @@ enum class UiState {
   SetupMenu,
   SetRtc,
   LocationSetup,
+  CatalogTypeBrowser,
   CatalogBrowser,
   AxisCalibration,
   GotoSpeed,
@@ -197,6 +198,8 @@ constexpr int kSetupMenuBacklashIndex = 5;
 constexpr int kSetupMenuWifiIndex = 6;
 constexpr int kSetupMenuBackIndex = 7;
 
+int catalogTypeIndex = 0;
+int catalogTypeObjectIndex = 0;
 int catalogIndex = 0;
 
 String infoMessage;
@@ -514,6 +517,16 @@ void drawStatus() {
     display.print("Track: ");
     display.print(gotoTargetName);
   }
+  if (uiState == UiState::StatusScreen) {
+    display.setCursor(0, 50);
+    display.printf("Joy:%+0.2f,%+0.2f", systemState.joystickX, systemState.joystickY);
+    display.setCursor(90, 50);
+    display.print(systemState.joystickButtonPressed ? "BTN" : "---");
+    display.setCursor(112, 50);
+    display.print(systemState.mountLinkReady ? "L" : "!");
+    display.setCursor(118, 50);
+    display.print(systemState.manualCommandOk ? "C" : "!");
+  }
 }
 
 void drawStatusMenuPrompt() {
@@ -657,24 +670,76 @@ void drawLocationSetup() {
   display.print("Joy=Next Enc=Save/Back");
 }
 
-void drawCatalog() {
+void drawCatalogTypeMenu() {
   display.setCursor(0, 10);
-  display.print("Catalog");
-  if (catalog::size() == 0) {
+  display.print("Catalog Types");
+  size_t typeCount = catalog::typeGroupCount();
+  if (typeCount == 0) {
+    display.setCursor(0, 20);
+    display.print("No categories");
+    display.setCursor(0, 28);
+    display.print("Joy=Back");
+    return;
+  }
+  int total = static_cast<int>(typeCount);
+  while (catalogTypeIndex < 0) catalogTypeIndex += total;
+  while (catalogTypeIndex >= total) catalogTypeIndex -= total;
+
+  CatalogTypeSummary summary{};
+  if (!catalog::getTypeSummary(static_cast<size_t>(catalogTypeIndex), summary)) {
+    display.setCursor(0, 20);
+    display.print("Invalid type");
+    return;
+  }
+
+  display.setCursor(0, 20);
+  display.print(summary.name);
+  display.setCursor(0, 28);
+  display.printf("(%d/%d)", catalogTypeIndex + 1, total);
+  display.setCursor(0, 36);
+  display.printf("Objects: %u", static_cast<unsigned>(summary.objectCount));
+  display.setCursor(0, 52);
+  display.print("Enc=Browse Joy=Back");
+}
+
+void drawCatalog() {
+  CatalogTypeSummary summary{};
+  if (!catalog::getTypeSummary(static_cast<size_t>(catalogTypeIndex), summary) ||
+      summary.objectCount == 0) {
+    display.setCursor(0, 10);
+    display.print("Catalog");
     display.setCursor(0, 20);
     display.print("No entries");
     return;
   }
-  if (catalogIndex < 0) catalogIndex = 0;
-  if (catalogIndex >= static_cast<int>(catalog::size())) {
-    catalogIndex = catalog::size() - 1;
+
+  int localCount = static_cast<int>(summary.objectCount);
+  while (catalogTypeObjectIndex < 0) catalogTypeObjectIndex += localCount;
+  while (catalogTypeObjectIndex >= localCount) catalogTypeObjectIndex -= localCount;
+
+  size_t globalIndex = 0;
+  if (!catalog::getTypeObjectIndex(static_cast<size_t>(catalogTypeIndex),
+                                   static_cast<size_t>(catalogTypeObjectIndex), globalIndex)) {
+    display.setCursor(0, 10);
+    display.print("Catalog");
+    display.setCursor(0, 20);
+    display.print("Invalid entry");
+    return;
   }
-  const CatalogObject* object = catalog::get(static_cast<size_t>(catalogIndex));
+
+  catalogIndex = static_cast<int>(globalIndex);
+  const CatalogObject* object = catalog::get(globalIndex);
   if (!object) {
     display.setCursor(0, 20);
     display.print("Invalid entry");
     return;
   }
+
+  display.setCursor(0, 10);
+  display.print(summary.name);
+  display.setCursor(90, 10);
+  display.printf("%d/%d", catalogTypeObjectIndex + 1, localCount);
+
   DateTime now = currentDateTime();
   double ra;
   double dec;
@@ -697,7 +762,7 @@ void drawCatalog() {
   display.print("Dec: ");
   display.print(decBuffer);
   display.setCursor(0, 52);
-  display.printf("Alt: %+.1f%c Joy=Exit", altDeg, kDegreeSymbol);
+  display.printf("Alt: %+.1f%c Joy=Types", altDeg, kDegreeSymbol);
   display.setCursor(0, 60);
   display.printf("Mag: %.1f %s", object->magnitude, above ? "" : "(below)");
   display.setCursor(78, 60);
@@ -1155,6 +1220,9 @@ void render() {
       break;
     case UiState::LocationSetup:
       drawLocationSetup();
+      break;
+    case UiState::CatalogTypeBrowser:
+      drawCatalogTypeMenu();
       break;
     case UiState::CatalogBrowser:
       drawCatalog();
@@ -1672,14 +1740,57 @@ void handleMainMenuInput(int delta) {
       showInfo("Tracking off");
       break;
     case 4:
-      if (catalog::size() == 0) {
+      if (catalog::size() == 0 || catalog::typeGroupCount() == 0) {
         showInfo("Catalog missing");
       } else {
-        catalogIndex = systemState.selectedCatalogIndex;
-        int total = static_cast<int>(catalog::size());
-        if (catalogIndex < 0) catalogIndex = 0;
-        if (catalogIndex >= total) catalogIndex = total - 1;
-        setUiState(UiState::CatalogBrowser);
+        size_t typeCount = catalog::typeGroupCount();
+        int targetType = systemState.selectedCatalogTypeIndex;
+        if (targetType < 0 || targetType >= static_cast<int>(typeCount)) {
+          targetType = 0;
+        }
+
+        if (systemState.selectedCatalogIndex >= 0 &&
+            systemState.selectedCatalogIndex < static_cast<int>(catalog::size())) {
+          int group = catalog::findTypeGroupForObject(
+              static_cast<size_t>(systemState.selectedCatalogIndex));
+          if (group >= 0) {
+            targetType = group;
+            catalogIndex = systemState.selectedCatalogIndex;
+            int local = catalog::findTypeLocalIndex(static_cast<size_t>(group),
+                                                   static_cast<size_t>(systemState.selectedCatalogIndex));
+            if (local >= 0) {
+              catalogTypeObjectIndex = local;
+            } else {
+              catalogTypeObjectIndex = 0;
+            }
+          }
+        }
+
+        catalogTypeIndex = targetType;
+
+        CatalogTypeSummary summary{};
+        if (!catalog::getTypeSummary(static_cast<size_t>(catalogTypeIndex), summary) ||
+            summary.objectCount == 0) {
+          catalogTypeObjectIndex = 0;
+        } else {
+          if (catalogTypeObjectIndex < 0) catalogTypeObjectIndex = 0;
+          if (catalogTypeObjectIndex >= static_cast<int>(summary.objectCount)) {
+            catalogTypeObjectIndex = static_cast<int>(summary.objectCount) - 1;
+          }
+          size_t globalIndex = 0;
+          if (!catalog::getTypeObjectIndex(static_cast<size_t>(catalogTypeIndex),
+                                           static_cast<size_t>(catalogTypeObjectIndex), globalIndex)) {
+            catalogTypeObjectIndex = 0;
+            if (catalog::getTypeObjectIndex(static_cast<size_t>(catalogTypeIndex), 0, globalIndex)) {
+              catalogIndex = static_cast<int>(globalIndex);
+            }
+          } else {
+            catalogIndex = static_cast<int>(globalIndex);
+          }
+        }
+
+        systemState.menuMode = MenuMode::Catalog;
+        setUiState(UiState::CatalogTypeBrowser);
       }
       break;
     case 5:
@@ -1795,27 +1906,91 @@ void handleRtcInput(int delta) {
   }
 }
 
+void handleCatalogTypeInput(int delta) {
+  size_t typeCount = catalog::typeGroupCount();
+  if (typeCount == 0) {
+    if (input::consumeEncoderClick() || input::consumeJoystickPress()) {
+      setUiState(UiState::MainMenu);
+    }
+    return;
+  }
+
+  int total = static_cast<int>(typeCount);
+  if (delta != 0) {
+    catalogTypeIndex += delta;
+    while (catalogTypeIndex < 0) catalogTypeIndex += total;
+    while (catalogTypeIndex >= total) catalogTypeIndex -= total;
+    catalogTypeObjectIndex = 0;
+  }
+
+  if (input::consumeJoystickPress()) {
+    systemState.menuMode = MenuMode::Status;
+    setUiState(UiState::MainMenu);
+    return;
+  }
+
+  if (input::consumeEncoderClick()) {
+    CatalogTypeSummary summary{};
+    if (!catalog::getTypeSummary(static_cast<size_t>(catalogTypeIndex), summary) ||
+        summary.objectCount == 0) {
+      showInfo("Empty type");
+      return;
+    }
+    if (catalogTypeObjectIndex >= static_cast<int>(summary.objectCount)) {
+      catalogTypeObjectIndex = 0;
+    }
+    size_t globalIndex = 0;
+    if (!catalog::getTypeObjectIndex(static_cast<size_t>(catalogTypeIndex),
+                                     static_cast<size_t>(catalogTypeObjectIndex), globalIndex)) {
+      showInfo("Invalid entry");
+      return;
+    }
+    catalogIndex = static_cast<int>(globalIndex);
+    setUiState(UiState::CatalogBrowser);
+  }
+}
+
 void handleCatalogInput(int delta) {
-  if (catalog::size() == 0) {
+  if (catalog::size() == 0 || catalog::typeGroupCount() == 0) {
     bool exit = input::consumeEncoderClick();
     if (!exit) {
       exit = input::consumeJoystickPress();
     }
     if (exit) {
-      setUiState(UiState::MainMenu);
+      setUiState(UiState::CatalogTypeBrowser);
     }
     return;
   }
-  if (delta != 0) {
-    catalogIndex += delta;
-    int total = static_cast<int>(catalog::size());
-    while (catalogIndex < 0) catalogIndex += total;
-    while (catalogIndex >= total) catalogIndex -= total;
+
+  CatalogTypeSummary summary{};
+  if (!catalog::getTypeSummary(static_cast<size_t>(catalogTypeIndex), summary) ||
+      summary.objectCount == 0) {
+    showInfo("Empty type");
+    setUiState(UiState::CatalogTypeBrowser);
+    return;
   }
+
+  int total = static_cast<int>(summary.objectCount);
+  if (delta != 0) {
+    catalogTypeObjectIndex += delta;
+    while (catalogTypeObjectIndex < 0) catalogTypeObjectIndex += total;
+    while (catalogTypeObjectIndex >= total) catalogTypeObjectIndex -= total;
+  }
+
+  size_t globalIndex = 0;
+  if (!catalog::getTypeObjectIndex(static_cast<size_t>(catalogTypeIndex),
+                                   static_cast<size_t>(catalogTypeObjectIndex), globalIndex)) {
+    showInfo("Invalid entry");
+    setUiState(UiState::CatalogTypeBrowser);
+    return;
+  }
+  catalogIndex = static_cast<int>(globalIndex);
+
   bool select = input::consumeEncoderClick();
   if (select) {
     systemState.selectedCatalogIndex = catalogIndex;
-    const CatalogObject* object = catalog::get(static_cast<size_t>(catalogIndex));
+    systemState.selectedCatalogTypeIndex = catalogTypeIndex;
+    const CatalogObject* object = catalog::get(globalIndex);
     if (object) {
       if (startGotoToObject(*object, catalogIndex)) {
         selectedObjectName = sanitizeForDisplay(object->name);
@@ -1824,7 +1999,7 @@ void handleCatalogInput(int delta) {
     }
   }
   if (input::consumeJoystickPress()) {
-    setUiState(UiState::MainMenu);
+    setUiState(UiState::CatalogTypeBrowser);
   }
 }
 
@@ -1933,6 +2108,9 @@ void handleInput() {
       break;
     case UiState::LocationSetup:
       handleLocationInput(delta);
+      break;
+    case UiState::CatalogTypeBrowser:
+      handleCatalogTypeInput(delta);
       break;
     case UiState::CatalogBrowser:
       handleCatalogInput(delta);

@@ -29,6 +29,9 @@ void setup() {
   storage::init();
   systemState.polarAligned = storage::getConfig().polarAligned;
   systemState.selectedCatalogIndex = -1;
+  systemState.selectedCatalogTypeIndex = -1;
+  systemState.mountLinkReady = false;
+  systemState.manualCommandOk = false;
 
   input::init();
   if (storage::getConfig().joystickCalibrated) {
@@ -63,6 +66,9 @@ void loop() {
 
   float azInput = input::getJoystickNormalizedX();
   float altInput = input::getJoystickNormalizedY();
+  systemState.joystickX = azInput;
+  systemState.joystickY = altInput;
+  systemState.joystickButtonPressed = input::isJoystickButtonPressed();
   systemState.joystickActive = (fabs(azInput) > config::JOYSTICK_DEADZONE ||
                                 fabs(altInput) > config::JOYSTICK_DEADZONE);
   motion::setManualRate(Axis::Az, azInput * config::MAX_RPM_MANUAL);
@@ -85,9 +91,11 @@ void loop() {
   if (!g_mountLinkReady) {
     if (comm::waitForReady(1)) {
       g_mountLinkReady = true;
+      systemState.manualCommandOk = true;
       display_menu::showInfo("Mount link ready", 2000);
     }
   }
+  systemState.mountLinkReady = g_mountLinkReady;
 
   wifi_ota::update();
   delay(20);

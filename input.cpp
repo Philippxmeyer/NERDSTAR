@@ -5,6 +5,8 @@
 #include <math.h>
 #include <stdint.h>
 
+#include <esp_timer.h>
+
 #include "config.h"
 
 namespace {
@@ -15,9 +17,9 @@ volatile uint8_t encoderState = 0;
 volatile int8_t encoderStepAccumulator = 0;
 volatile bool encoderClick = false;
 volatile bool joystickClick = false;
-volatile uint32_t lastEncoderEdgeUs = 0;
+volatile uint64_t lastEncoderButtonUs = 0;
 
-constexpr uint32_t ENCODER_DEBOUNCE_US = 250;
+constexpr uint32_t ENCODER_DEBOUNCE_US = 5000;
 constexpr int kEncoderStepsPerNotch = 4;
 
 constexpr int8_t kTransitionTable[4][4] = {
@@ -67,7 +69,12 @@ void IRAM_ATTR handleEncoderPinB() {
 }
 
 void IRAM_ATTR handleEncoderButton() {
+  uint64_t now = esp_timer_get_time();
+  if (now - lastEncoderButtonUs < ENCODER_DEBOUNCE_US) {
+    return;
+  }
   if (digitalRead(config::ROT_BTN) == LOW) {
+    lastEncoderButtonUs = now;
     encoderClick = true;
   }
 }
@@ -146,6 +153,8 @@ bool consumeJoystickPress() {
   joystickClick = false;
   return clicked;
 }
+
+bool isJoystickButtonPressed() { return lastJoystickState; }
 
 int consumeEncoderDelta() {
   portENTER_CRITICAL(&encoderMux);
