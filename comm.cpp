@@ -36,11 +36,19 @@ void dropPendingInput() {
 
 bool readLine(String& line, uint32_t timeoutMs) {
   uint32_t start = millis();
+  bool discardingOverflow = false;
   while (true) {
     while (uartLink.available()) {
       char c = static_cast<char>(uartLink.read());
       if (timeoutMs != 0) {
         start = millis();
+      }
+      if (discardingOverflow) {
+        if (c == '\n') {
+          discardingOverflow = false;
+          rxBuffer.clear();
+        }
+        continue;
       }
       if (c == '\n') {
         line = rxBuffer;
@@ -54,7 +62,7 @@ bool readLine(String& line, uint32_t timeoutMs) {
             Serial.println("[COMM] RX overflow, resetting buffer");
           }
           rxBuffer.clear();
-          break;
+          discardingOverflow = true;
         }
       }
     }
