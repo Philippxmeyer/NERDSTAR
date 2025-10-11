@@ -28,24 +28,24 @@ constexpr uint8_t COMM_RX_PIN = 16;
 
 #elif defined(DEVICE_ROLE_HID)
 
-// Joystick KY-023 pins (ESP32-C3 SuperMini)
-constexpr uint8_t JOY_X = 0;
-constexpr uint8_t JOY_Y = 1;
-constexpr uint8_t JOY_BTN = 6;  // LOW active, use external pull-up if module lacks one
+// Joystick KY-023 pins (ESP32-WROOM DevKit)
+constexpr uint8_t JOY_X = 34;  // ADC1_CH6, input only
+constexpr uint8_t JOY_Y = 35;  // ADC1_CH7, input only
+constexpr uint8_t JOY_BTN = 27;  // LOW active, internal pull-up available
 
-// Rotary encoder pins (ESP32-C3 SuperMini)
-constexpr uint8_t ROT_A = 3;
-constexpr uint8_t ROT_B = 4;
-constexpr uint8_t ROT_BTN = 5;
+// Rotary encoder pins (ESP32-WROOM DevKit)
+constexpr uint8_t ROT_A = 18;
+constexpr uint8_t ROT_B = 19;
+constexpr uint8_t ROT_BTN = 23;
 
-// OLED + RTC I2C pins (ESP32-C3 SuperMini default)
-constexpr uint8_t SDA_PIN = 8;
-constexpr uint8_t SCL_PIN = 9;
+// OLED + RTC I2C pins (ESP32-WROOM default)
+constexpr uint8_t SDA_PIN = 21;
+constexpr uint8_t SCL_PIN = 22;
 
-// Inter-board communication (UART1 on ESP32-C3)
-constexpr uart_port_t COMM_UART_NUM = UART_NUM_1;
-constexpr uint8_t COMM_TX_PIN = 21;
-constexpr uint8_t COMM_RX_PIN = 20;
+// Inter-board communication (UART2 on ESP32-WROOM)
+constexpr uart_port_t COMM_UART_NUM = UART_NUM_2;
+constexpr uint8_t COMM_TX_PIN = 17;
+constexpr uint8_t COMM_RX_PIN = 16;
 
 #else
 #error "Unsupported device role"

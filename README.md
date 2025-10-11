@@ -33,7 +33,7 @@ und ein Hauch Größenwahn ergeben zusammen ein
 | 📺 **OLED Status Display**    | Zeigt RA/Dec, Tracking-/Goto-Status und gewähltes Ziel                      |
 | ⚙️ **µs-Timersteuerung**      | Stepper laufen so gleichmäßig, dass man sie fast atmen hört                |
 | 🧠 **ESP32 Dual-Core**        | Hauptrechner: Core 1 steuert die Motoren, Core 0 berechnet Kurs & Protokoll |
-| 🔌 **Zwei ESP32**             | Zweiter ESP32-C3 kümmert sich ausschließlich um HID (Display, Joystick, Persistenz) |
+| 🔌 **Zwei ESP32**             | Zweiter ESP32-WROOM kümmert sich ausschließlich um HID (Display, Joystick, Persistenz) |
 | 🔁 **Bulletproof HID-Link**   | Dedizierter UART + Retry-Logik sichert stabile Kommunikation zwischen den Boards |
 
 ---
@@ -54,13 +54,13 @@ und irgendwann sagen: „Lauf, kleiner ESP, lauf mit den Sternen.“
 | Komponente             | Aufgabe                             | Pins / Anschlüsse                     |
 | ---------------------- | ----------------------------------- | ------------------------------------- |
 | **ESP32 (Hauptrechner)** | Kursberechnung + Motorsteuerung      | UART2 TX (17) ↔ HID-RX, UART2 RX (16) ↔ HID-TX |
-| **ESP32-C3 (HID)**     | Display, Eingaben, EEPROM-Katalog    | UART1 TX (21) ↔ Main-RX, UART1 RX (20) ↔ Main-TX |
+| **ESP32-WROOM (HID)**  | Display, Eingaben, EEPROM-Katalog    | UART2 TX (17) ↔ Main-RX, UART2 RX (16) ↔ Main-TX |
 | **TMC2209 (RA)**       | Dreht um die Rektaszensions-Achse   | STEP 25, DIR 26, EN 27, MS1/MS2 via Pull-up = 1/16 µSteps |
 | **TMC2209 (DEC)**      | Dreht um die Deklinations-Achse     | STEP 13, DIR 12, EN 14, MS1/MS2 via Pull-up = 1/16 µSteps |
-| **OLED (SSD1306)**     | Zeigt alles an, außer Mitleid       | I²C: SDA 8, SCL 9 (HID-ESP32-C3)      |
-| **RTC (DS3231)**       | Sagt dir, wann du’s verpasst hast   | I²C: SDA 8, SCL 9 (HID-ESP32-C3)      |
-| **Joystick (KY-023)**  | Steuert alles intuitiv falsch herum | VRx 0, VRy 1, SW 6 (HID-ESP32-C3)     |
-| **Rotary-Encoder**     | Menü & Bestätigungen                | A = 3, B = 4, Button = 5 (HID-ESP32-C3) |
+| **OLED (SSD1306)**     | Zeigt alles an, außer Mitleid       | I²C: SDA 21, SCL 22 (HID-ESP32-WROOM) |
+| **RTC (DS3231)**       | Sagt dir, wann du’s verpasst hast   | I²C: SDA 21, SCL 22 (HID-ESP32-WROOM) |
+| **Joystick (KY-023)**  | Steuert alles intuitiv falsch herum | VRx 34, VRy 35, SW 27 (HID-ESP32-WROOM) |
+| **Rotary-Encoder**     | Menü & Bestätigungen                | A = 18, B = 19, Button = 23 (HID-ESP32-WROOM) |
 
 ### 🔌 Verkabelung im Detail
 
@@ -77,23 +77,23 @@ und irgendwann sagen: „Lauf, kleiner ESP, lauf mit den Sternen.“
 
 > Hinweis: PDN/UART (MS1) und MS2 werden nicht mehr zum ESP32 geführt. Ziehe beide Pins per Pull-up (z. B. 10 kΩ nach VIO) auf HIGH, um dauerhaft 1/16 Mikroschritte zu erzwingen.
 
-#### HID-ESP32-C3 → Benutzerschnittstellen
+#### HID-ESP32-WROOM → Benutzerschnittstellen
 
 | Gerät / Signal                  | Pin am ESP32 (HID) | Bemerkung |
 | -------------------------------- | ------------------ | --------- |
-| OLED + RTC SDA                   | 8                  | Gemeinsamer I²C-Bus |
-| OLED + RTC SCL                   | 9                  | Gemeinsamer I²C-Bus |
-| Rotary-Encoder A                 | 3                  | INPUT_PULLUP verwenden |
-| Rotary-Encoder B                 | 4                  | INPUT_PULLUP verwenden |
-| Rotary-Encoder Button            | 5                  | Mit INPUT_PULLUP betreiben |
-| Joystick X (VRx)                 | 0                  | ADC, high impedance |
-| Joystick Y (VRy)                 | 1                  | ADC |
-| Joystick Button                  | 7                  | LOW-aktiv, ggf. externen Pull-up auf 3.3 V verwenden |
+| OLED + RTC SDA                   | 21                 | Gemeinsamer I²C-Bus |
+| OLED + RTC SCL                   | 22                 | Gemeinsamer I²C-Bus |
+| Rotary-Encoder A                 | 18                 | INPUT_PULLUP verwenden |
+| Rotary-Encoder B                 | 19                 | INPUT_PULLUP verwenden |
+| Rotary-Encoder Button            | 23                 | Mit INPUT_PULLUP betreiben |
+| Joystick X (VRx)                 | 34                 | ADC, input only |
+| Joystick Y (VRy)                 | 35                 | ADC, input only |
+| Joystick Button                  | 27                 | LOW-aktiv, interner Pull-up verfügbar |
 | Gemeinsame Versorgung für HID    | 3.3 V / GND        | Alle Sensoren/Bedienelemente |
 
 #### Verbindung zwischen den beiden ESP32
 
-- **TX ↔ RX kreuzen:** Main-TX (GPIO 17) → HID-RX (GPIO 20) und Main-RX (GPIO 16) ← HID-TX (GPIO 21)
+- **TX ↔ RX kreuzen:** Main-TX (GPIO 17) → HID-RX (GPIO 16) und Main-RX (GPIO 16) ← HID-TX (GPIO 17)
 - **GND verbinden:** Gemeinsamer Bezugspunkt für UART und Sensoren
 - Optional: **5 V / 3.3 V** gemeinsam einspeisen, wenn beide Boards aus derselben Quelle versorgt werden
 - Hinweis: Der Link nutzt jetzt einen dedizierten Hardware-UART. USB-Debug-Ausgaben laufen parallel weiter, ohne das Protokoll zu stören.
@@ -138,8 +138,8 @@ NERDSTAR/
 
 Beide Varianten sprechen über einen dedizierten Hardware-UART: Der
 Hauptrechner nutzt **UART2 auf GPIO17/GPIO16**, die HID-Variante mit dem
-ESP32-C3 SuperMini **UART1 auf GPIO21/GPIO20**. USB-Debug läuft parallel
-über den integrierten Serial-Port und bleibt störungsfrei.
+ESP32-WROOM DevKit ebenso **UART2 auf GPIO17/GPIO16**. USB-Debug läuft
+parallel über den integrierten Serial-Port und bleibt störungsfrei.
 
 ---
 
@@ -200,13 +200,13 @@ Kurz gesagt: Der ESP32 weiß, wohin es geht, und bleibt dank Tracking dort.
 
 1. Arduino IDE öffnen
 2. Boards wählen:
-   - HID-Controller: **ESP32C3 Dev Module** (ESP32-C3 SuperMini)
+   - HID-Controller: **ESP32 Dev Module** (ESP32-WROOM DevKit)
    - Hauptrechner: **ESP32 Dev Module**
 3. Bibliotheken installieren (`Adafruit_SSD1306`, `Adafruit_GFX`, `RTClib`)
 4. Mikroschritt-Pins setzen: PDN/UART (MS1) & MS2 der TMC2209 per Pull-up auf VIO (1/16 µSteps)
-5. **HID-ESP32-C3** flashen (ohne zusätzliche Build-Flags)
+5. **HID-ESP32-WROOM** flashen (ohne zusätzliche Build-Flags)
 6. **Hauptrechner-ESP32** flashen (Build-Flag `-DDEVICE_ROLE_MAIN` setzen)
-7. UART kreuzen: Main-TX17 ↔ HID-RX20, Main-RX16 ↔ HID-TX21, GND verbinden
+7. UART kreuzen: Main-TX17 ↔ HID-RX16, Main-RX16 ↔ HID-TX17, GND verbinden
 8. Kaffee holen
 9. Freuen, dass du was gebaut hast, das klingt wie ein NASA-Projekt und aussieht wie ein Nerd-Traum.
 
