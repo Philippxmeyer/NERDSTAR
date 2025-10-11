@@ -16,17 +16,26 @@ uint16_t nextRequestId = 1;
 SemaphoreHandle_t rpcMutex = nullptr;
 #endif
 
+// Buffer that accumulates incoming characters until a full line has been
+// received. This allows callers to use short timeouts without losing partial
+// data when no newline has arrived yet.
+String rxBuffer;
+
 bool readLine(String& line, uint32_t timeoutMs) {
-  line = "";
   uint32_t start = millis();
   while (true) {
     while (uartLink.available()) {
       char c = static_cast<char>(uartLink.read());
+      if (timeoutMs != 0) {
+        start = millis();
+      }
       if (c == '\n') {
+        line = rxBuffer;
+        rxBuffer.clear();
         return true;
       }
       if (c != '\r') {
-        line += c;
+        rxBuffer += c;
       }
     }
     if (timeoutMs != 0 && (millis() - start) >= timeoutMs) {
@@ -65,6 +74,7 @@ void initLink() {
   uartLink.setRxBufferSize(256);
   uartLink.setTimeout(5);
   uartLink.flush();
+  rxBuffer.clear();
 #if defined(DEVICE_ROLE_HID)
   if (rpcMutex == nullptr) {
     rpcMutex = xSemaphoreCreateMutex();
