@@ -16,6 +16,7 @@ void update();
 float getJoystickNormalizedX();
 float getJoystickNormalizedY();
 bool consumeJoystickPress();
+bool isJoystickButtonPressed();
 int consumeEncoderDelta();
 bool consumeEncoderClick();
 int getJoystickCenterX();
