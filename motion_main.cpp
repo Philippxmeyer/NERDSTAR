@@ -6,8 +6,6 @@
 #include <cmath>
 #include <limits>
 
-#include <HardwareSerial.h>
-#include <TMCStepper.h>
 #include <esp32-hal-gpio.h>
 #include <esp_rom_sys.h>
 #include <esp_timer.h>
@@ -75,10 +73,6 @@ BacklashConfig backlash{0, 0};
 
 portMUX_TYPE trackingMux = portMUX_INITIALIZER_UNLOCKED;
 bool trackingEnabled = false;
-
-HardwareSerial driverAzSerial(2);
-TMC2209Stepper driverAz(&driverAzSerial, config::R_SENSE, config::DRIVER_ADDR_RA);
-TMC2209Stepper driverAlt(&Serial1, config::R_SENSE, config::DRIVER_ADDR_DEC);
 
 AxisState& getAxisState(Axis axis) {
   return (axis == Axis::Az) ? axisAz : axisAlt;
@@ -210,15 +204,6 @@ uint64_t updateAxis(AxisState& axis, uint64_t nowUs) {
   return nextDue;
 }
 
-void configureDriver(TMC2209Stepper& driver) {
-  driver.begin();
-  delay(50);
-  driver.pdn_disable(true);
-  driver.en_spreadCycle(false);
-  driver.rms_current(config::DRIVER_CURRENT_MA);
-  driver.microsteps(static_cast<uint16_t>(config::MICROSTEPS));
-}
-
 }  // namespace
 
 namespace motion {
@@ -235,12 +220,6 @@ void init() {
   digitalWrite(axisAlt.enPin, HIGH);
   digitalWrite(axisAz.stepPin, LOW);
   digitalWrite(axisAlt.stepPin, LOW);
-
-  driverAzSerial.begin(115200, SERIAL_8N1, config::UART_RA_RX, config::UART_RA_TX);
-  Serial1.begin(115200, SERIAL_8N1, config::UART_DEC_RX, config::UART_DEC_TX);
-
-  configureDriver(driverAz);
-  configureDriver(driverAlt);
 
   digitalWrite(axisAz.enPin, LOW);
   digitalWrite(axisAlt.enPin, LOW);

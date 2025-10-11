@@ -34,6 +34,7 @@ und ein Hauch Größenwahn ergeben zusammen ein
 | ⚙️ **µs-Timersteuerung**      | Stepper laufen so gleichmäßig, dass man sie fast atmen hört                |
 | 🧠 **ESP32 Dual-Core**        | Hauptrechner: Core 1 steuert die Motoren, Core 0 berechnet Kurs & Protokoll |
 | 🔌 **Zwei ESP32**             | Zweiter ESP32-C3 kümmert sich ausschließlich um HID (Display, Joystick, Persistenz) |
+| 🔁 **Bulletproof HID-Link**   | Dedizierter UART + Retry-Logik sichert stabile Kommunikation zwischen den Boards |
 
 ---
 
@@ -52,10 +53,10 @@ und irgendwann sagen: „Lauf, kleiner ESP, lauf mit den Sternen.“
 
 | Komponente             | Aufgabe                             | Pins / Anschlüsse                     |
 | ---------------------- | ----------------------------------- | ------------------------------------- |
-| **ESP32 (Hauptrechner)** | Kursberechnung + Motorsteuerung      | UART0 TX (1) ↔ HID-RX, UART0 RX (3) ↔ HID-TX |
+| **ESP32 (Hauptrechner)** | Kursberechnung + Motorsteuerung      | UART2 TX (17) ↔ HID-RX, UART2 RX (16) ↔ HID-TX |
 | **ESP32-C3 (HID)**     | Display, Eingaben, EEPROM-Katalog    | UART1 TX (21) ↔ Main-RX, UART1 RX (20) ↔ Main-TX |
-| **TMC2209 (RA)**       | Dreht um die Rektaszensions-Achse   | STEP 25, DIR 26, EN 27, UART TX/RX = 17/16 |
-| **TMC2209 (DEC)**      | Dreht um die Deklinations-Achse     | STEP 13, DIR 12, EN 14, UART TX/RX = 5/4 |
+| **TMC2209 (RA)**       | Dreht um die Rektaszensions-Achse   | STEP 25, DIR 26, EN 27, MS1/MS2 via Pull-up = 1/16 µSteps |
+| **TMC2209 (DEC)**      | Dreht um die Deklinations-Achse     | STEP 13, DIR 12, EN 14, MS1/MS2 via Pull-up = 1/16 µSteps |
 | **OLED (SSD1306)**     | Zeigt alles an, außer Mitleid       | I²C: SDA 8, SCL 9 (HID-ESP32-C3)      |
 | **RTC (DS3231)**       | Sagt dir, wann du’s verpasst hast   | I²C: SDA 8, SCL 9 (HID-ESP32-C3)      |
 | **Joystick (KY-023)**  | Steuert alles intuitiv falsch herum | VRx 0, VRy 1, SW 6 (HID-ESP32-C3)     |
@@ -72,13 +73,9 @@ und irgendwann sagen: „Lauf, kleiner ESP, lauf mit den Sternen.“
 | Schritt (STEP)           | 25                  | STEP                      | –                          |
 | Richtung (DIR)           | 12                  | –                         | DIR                        |
 | Schritt (STEP)           | 13                  | –                         | STEP                       |
-| Treiber-UART TX          | 17                  | PDN/UART                  | –                          |
-| Treiber-UART RX          | 16                  | PDN/UART                  | –                          |
-| Treiber-UART TX          | 5                   | –                         | PDN/UART                   |
-| Treiber-UART RX          | 4                   | –                         | PDN/UART                   |
 | Versorgung & Masse       | 5 V / GND           | VM / GND                  | VM / GND                   |
 
-> Hinweis: Beide TMC2209 teilen sich die Versorgung, die UART-Leitungen sind getrennt. TX und RX bitte jeweils an den PDN/UART-Pin laut Modulbelegung anschließen.
+> Hinweis: PDN/UART (MS1) und MS2 werden nicht mehr zum ESP32 geführt. Ziehe beide Pins per Pull-up (z. B. 10 kΩ nach VIO) auf HIGH, um dauerhaft 1/16 Mikroschritte zu erzwingen.
 
 #### HID-ESP32-C3 → Benutzerschnittstellen
 
@@ -96,10 +93,10 @@ und irgendwann sagen: „Lauf, kleiner ESP, lauf mit den Sternen.“
 
 #### Verbindung zwischen den beiden ESP32
 
-- **TX ↔ RX kreuzen:** Main-TX (GPIO 33) → HID-RX (GPIO 20) und Main-RX (GPIO 32) ← HID-TX (GPIO 21)
+- **TX ↔ RX kreuzen:** Main-TX (GPIO 17) → HID-RX (GPIO 20) und Main-RX (GPIO 16) ← HID-TX (GPIO 21)
 - **GND verbinden:** Gemeinsamer Bezugspunkt für UART und Sensoren
 - Optional: **5 V / 3.3 V** gemeinsam einspeisen, wenn beide Boards aus derselben Quelle versorgt werden
-- Hinweis: Während die Boards miteinander sprechen, ist derselbe UART auch am USB-Seriell-Wandler angebunden. Debug-Logs über USB funktionieren weiterhin, aber es werden alle Protokollnachrichten mitgeschnitten.
+- Hinweis: Der Link nutzt jetzt einen dedizierten Hardware-UART. USB-Debug-Ausgaben laufen parallel weiter, ohne das Protokoll zu stören.
 
 Diese Belegung entspricht exakt den Konstanten in [`config.h`](config.h) und stellt sicher, dass jede Komponente am richtigen Controller hängt.
 
@@ -139,9 +136,10 @@ NERDSTAR/
   Schrittmotoren, startet zwei Tasks (Core 0 = Kursberechnung & Protokoll,
   Core 1 = Motorsteuerung) und beantwortet alle Motion-RPCs.
 
-Beide Varianten verwenden den Standard-UART0 als Link: Beim Hauptrechner
-liegen die Leitungen auf **TX1/RX3**, die HID-Variante mit dem ESP32-C3
-SuperMini nutzt **TX21/RX20**. Damit teilen sich UART-Link und USB-Debug-Port den gleichen Kanal.
+Beide Varianten sprechen über einen dedizierten Hardware-UART: Der
+Hauptrechner nutzt **UART2 auf GPIO17/GPIO16**, die HID-Variante mit dem
+ESP32-C3 SuperMini **UART1 auf GPIO21/GPIO20**. USB-Debug läuft parallel
+über den integrierten Serial-Port und bleibt störungsfrei.
 
 ---
 
@@ -184,10 +182,17 @@ Kurz gesagt: Der ESP32 weiß, wohin es geht, und bleibt dank Tracking dort.
 
 | Bibliothek         | Zweck                              | Empfohlene Version |
 | ------------------ | ---------------------------------- | ------------------ |
-| `TMCStepper`       | Kommunikation mit TMC2209          | ≥ 0.7.3            |
 | `Adafruit_SSD1306` | OLED-Anzeige                       | ≥ 2.5.9            |
 | `Adafruit_GFX`     | Grafik-Backend                     | ≥ 1.11.9           |
 | `RTClib`           | DS3231 RTC                         | ≥ 2.1.3            |
+
+---
+
+## 🛠 Debugging
+
+- Beide Controller initialisieren den USB-Seriell-Port mit **115200 Baud**.
+- Der HID-Controller loggt den Verbindungsstatus (`Mount link ready/offline`).
+- Der Hauptrechner bestätigt den Start beider Tasks und meldet etwaige RPC-Retrys mit `[COMM]` auf der Konsole.
 
 ---
 
@@ -197,12 +202,13 @@ Kurz gesagt: Der ESP32 weiß, wohin es geht, und bleibt dank Tracking dort.
 2. Boards wählen:
    - HID-Controller: **ESP32C3 Dev Module** (ESP32-C3 SuperMini)
    - Hauptrechner: **ESP32 Dev Module**
-3. Bibliotheken installieren (siehe oben)
-4. **HID-ESP32-C3** flashen (ohne zusätzliche Build-Flags)
-5. **Hauptrechner-ESP32** flashen (Build-Flag `-DDEVICE_ROLE_MAIN` setzen)
-6. UART kreuzen: Main-TX33 ↔ HID-RX20, Main-RX32 ↔ HID-TX21, GND verbinden
-7. Kaffee holen
-8. Freuen, dass du was gebaut hast, das klingt wie ein NASA-Projekt und aussieht wie ein Nerd-Traum.
+3. Bibliotheken installieren (`Adafruit_SSD1306`, `Adafruit_GFX`, `RTClib`)
+4. Mikroschritt-Pins setzen: PDN/UART (MS1) & MS2 der TMC2209 per Pull-up auf VIO (1/16 µSteps)
+5. **HID-ESP32-C3** flashen (ohne zusätzliche Build-Flags)
+6. **Hauptrechner-ESP32** flashen (Build-Flag `-DDEVICE_ROLE_MAIN` setzen)
+7. UART kreuzen: Main-TX17 ↔ HID-RX20, Main-RX16 ↔ HID-TX21, GND verbinden
+8. Kaffee holen
+9. Freuen, dass du was gebaut hast, das klingt wie ein NASA-Projekt und aussieht wie ein Nerd-Traum.
 
 ---
 

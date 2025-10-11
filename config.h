@@ -15,20 +15,16 @@ namespace config {
 constexpr uint8_t EN_RA = 27;
 constexpr uint8_t DIR_RA = 26;
 constexpr uint8_t STEP_RA = 25;
-constexpr uint8_t UART_RA_TX = 17;
-constexpr uint8_t UART_RA_RX = 16;
 
 // Stepper driver pins for Altitude axis
 constexpr uint8_t EN_DEC = 14;
 constexpr uint8_t DIR_DEC = 12;
 constexpr uint8_t STEP_DEC = 13;
-constexpr uint8_t UART_DEC_TX = 5;
-constexpr uint8_t UART_DEC_RX = 4;
 
-// Inter-board communication (UART1 on classic ESP32)
-constexpr uart_port_t COMM_UART_NUM = UART_NUM_1;
-constexpr uint8_t COMM_TX_PIN = 33;
-constexpr uint8_t COMM_RX_PIN = 32;
+// Inter-board communication (dedicated UART freed from the TMC drivers)
+constexpr uart_port_t COMM_UART_NUM = UART_NUM_2;
+constexpr uint8_t COMM_TX_PIN = 17;
+constexpr uint8_t COMM_RX_PIN = 16;
 
 #elif defined(DEVICE_ROLE_HID)
 
@@ -57,16 +53,11 @@ constexpr uint8_t COMM_RX_PIN = 20;
 
 constexpr uint32_t COMM_BAUD = 115200;
 constexpr uint32_t COMM_RESPONSE_TIMEOUT_MS = 200;
-
-// Driver configuration
-constexpr float R_SENSE = 0.11f;
-constexpr uint8_t DRIVER_ADDR_RA = 0b00;
-constexpr uint8_t DRIVER_ADDR_DEC = 0b01;
+constexpr uint32_t USB_DEBUG_BAUD = 115200;
 
 // Motion configuration
 constexpr double FULLSTEPS_PER_REV = 32.0 * 64.0; // 2048
 constexpr double MICROSTEPS = 16.0;
-constexpr float DRIVER_CURRENT_MA = 600.0f;
 constexpr float MAX_RPM_MANUAL = 3.0f;
 constexpr float GEAR_RATIO = 4.0f; // 1:4 reduction motor:telescope
 constexpr float JOYSTICK_DEADZONE = 0.05f;
