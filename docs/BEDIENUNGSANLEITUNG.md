@@ -24,7 +24,7 @@ Diese Anleitung führt dich Schritt für Schritt durch Inbetriebnahme und Bedien
    - **ESP32-C3 (HID)** → Eingabe- & Anzeigeeinheit
      - OLED & RTC: SDA 8 / SCL 9 (I²C, 3.3 V/GND)
      - Rotary-Encoder: A 3, B 4, Button 5
-    - Joystick: VRx 0, VRy 1, Button 7 (LOW-aktiv, bei Bedarf externen Pull-up auf 3.3 V ergänzen)
+    - Joystick: VRx 0, VRy 1, Button 6 (LOW-aktiv, bei Bedarf externen Pull-up auf 3.3 V ergänzen)
    - **ESP32 ↔ ESP32-C3 (UART-Link)**
      - Main-TX (33) → HID-RX (20), Main-RX (32) ← HID-TX (21)
      - Gemeinsame Masse verbinden (GND ↔ GND)

@@ -29,8 +29,11 @@ Adafruit_SSD1306 display(config::OLED_WIDTH, config::OLED_HEIGHT, &Wire, -1);
 RTC_DS3231 rtc;
 bool rtcAvailable = false;
 
+constexpr int kLineHeight = 8;
+
 enum class UiState {
   StatusScreen,
+  StatusDetails,
   MainMenu,
   PolarAlign,
   SetupMenu,
@@ -173,6 +176,7 @@ String selectedObjectName;
 String gotoTargetName;
 
 int mainMenuIndex = 0;
+int mainMenuScroll = 0;
 constexpr const char* kMainMenuItems[] = {"Status",
                                           "Polar Align",
                                           "Start Tracking",
@@ -184,6 +188,7 @@ constexpr const char* kMainMenuItems[] = {"Status",
 constexpr size_t kMainMenuCount = sizeof(kMainMenuItems) / sizeof(kMainMenuItems[0]);
 
 int setupMenuIndex = 0;
+int setupMenuScroll = 0;
 constexpr const char* kSetupMenuItems[] = {
     "Set RTC",       "Set Location", "Cal Joystick", "Cal Axes",
     "Goto Speed",    "Cal Backlash", "WiFi OTA",     "Back"};
@@ -226,6 +231,39 @@ void drawHeader() {
     display.getTextBounds(buffer, 0, 0, &x1, &y1, &w, &h);
     display.setCursor(config::OLED_WIDTH - w, 0);
     display.print(buffer);
+  }
+}
+
+int lineY(int top, int row) { return top + row * kLineHeight; }
+
+int computeVisibleRows(int topMargin, int bottomMargin) {
+  int available = config::OLED_HEIGHT - topMargin - bottomMargin;
+  if (available <= 0) {
+    return 0;
+  }
+  int rows = available / kLineHeight;
+  if (rows * kLineHeight < available) {
+    rows += 1;
+  }
+  return rows;
+}
+
+void ensureSelectionVisible(int& scroll, int selected, int visibleRows, size_t total) {
+  if (visibleRows <= 0) {
+    scroll = 0;
+    return;
+  }
+  int maxScroll = std::max<int>(0, static_cast<int>(total) - visibleRows);
+  if (scroll > maxScroll) {
+    scroll = maxScroll;
+  }
+  if (selected < scroll) {
+    scroll = selected;
+  } else if (selected >= scroll + visibleRows) {
+    scroll = selected - visibleRows + 1;
+  }
+  if (scroll < 0) {
+    scroll = 0;
   }
 }
 
@@ -482,7 +520,7 @@ double computeTravelTimeSteps(double distanceSteps,
   return peakSpeed / accel + peakSpeed / decel;
 }
 
-void drawStatus() {
+void drawStatus(bool diagnostics) {
   double azDeg = motion::stepsToAzDegrees(motion::getStepCount(Axis::Az));
   double altDeg = motion::stepsToAltDegrees(motion::getStepCount(Axis::Alt));
   char azBuffer[24];
@@ -490,32 +528,88 @@ void drawStatus() {
   snprintf(azBuffer, sizeof(azBuffer), "%06.2f%c", azDeg, kDegreeSymbol);
   formatDec(altDeg, altBuffer, sizeof(altBuffer));
 
-  display.setCursor(0, 10);
-  display.print("Az: ");
-  display.print(azBuffer);
-  display.setCursor(0, 18);
-  display.print("Alt: ");
-  display.print(altBuffer);
+  constexpr int kStatusTop = 10;
+  int row = 0;
+  int maxRows = ((config::OLED_HEIGHT - kStatusTop) / kLineHeight) + 1;
+  auto nextY = [&]() -> int {
+    if (row >= maxRows) {
+      return -1;
+    }
+    int y = lineY(kStatusTop, row);
+    ++row;
+    return y;
+  };
 
-  display.setCursor(0, 26);
-  display.print("Align: ");
-  display.print(systemState.polarAligned ? "Yes" : "No");
-  display.print("  Trk: ");
-  display.print(systemState.trackingActive ? "On" : "Off");
-
-  if (!selectedObjectName.isEmpty()) {
-    display.setCursor(0, 34);
-    display.print("Sel: ");
-    display.print(selectedObjectName);
+  if (int y = nextY(); y >= 0) {
+    display.setCursor(0, y);
+    display.print("Az: ");
+    display.print(azBuffer);
   }
-  if (systemState.gotoActive) {
-    display.setCursor(0, 42);
-    display.print("Goto: ");
-    display.print(gotoTargetName);
-  } else if (tracking.active) {
-    display.setCursor(0, 42);
-    display.print("Track: ");
-    display.print(gotoTargetName);
+  if (int y = nextY(); y >= 0) {
+    display.setCursor(0, y);
+    display.print("Alt: ");
+    display.print(altBuffer);
+  }
+  if (int y = nextY(); y >= 0) {
+    display.setCursor(0, y);
+    display.print("Align: ");
+    display.print(systemState.polarAligned ? "Yes" : "No");
+    display.print("  Trk: ");
+    display.print(systemState.trackingActive ? "On" : "Off");
+  }
+
+  if (diagnostics) {
+    auto printDetail = [&](const char* label, const String& value) {
+      if (int y = nextY(); y >= 0) {
+        display.setCursor(0, y);
+        display.print(label);
+        display.print(value);
+      }
+    };
+    if (systemState.gotoActive) {
+      printDetail("Goto: ", gotoTargetName);
+    } else if (tracking.active) {
+      printDetail("Track: ", gotoTargetName);
+    } else if (!selectedObjectName.isEmpty()) {
+      printDetail("Sel: ", selectedObjectName);
+    }
+    if (int y = nextY(); y >= 0) {
+      display.setCursor(0, y);
+      display.printf("Joy:%+0.2f,%+0.2f Btn:%s", systemState.joystickX, systemState.joystickY,
+                     systemState.joystickButtonPressed ? "On" : "Off");
+    }
+    if (int y = nextY(); y >= 0) {
+      display.setCursor(0, y);
+      display.print("Link: ");
+      display.print(systemState.mountLinkReady ? "Ready" : "Offline");
+      display.print(" Cmd: ");
+      display.print(systemState.manualCommandOk ? "OK" : "Err");
+    }
+    if (int y = nextY(); y >= 0) {
+      display.setCursor(0, y);
+      display.print("Joy=Close Enc=Menu");
+    }
+  } else {
+    if (!selectedObjectName.isEmpty()) {
+      if (int y = nextY(); y >= 0) {
+        display.setCursor(0, y);
+        display.print("Sel: ");
+        display.print(selectedObjectName);
+      }
+    }
+    if (systemState.gotoActive) {
+      if (int y = nextY(); y >= 0) {
+        display.setCursor(0, y);
+        display.print("Goto: ");
+        display.print(gotoTargetName);
+      }
+    } else if (tracking.active) {
+      if (int y = nextY(); y >= 0) {
+        display.setCursor(0, y);
+        display.print("Track: ");
+        display.print(gotoTargetName);
+      }
+    }
   }
   if (uiState == UiState::StatusScreen) {
     display.setCursor(0, 50);
@@ -530,8 +624,8 @@ void drawStatus() {
 }
 
 void drawStatusMenuPrompt() {
-  int footerY = config::OLED_HEIGHT - 8;
-  display.fillRect(0, footerY, config::OLED_WIDTH, 8, SSD1306_WHITE);
+  int footerY = config::OLED_HEIGHT - kLineHeight;
+  display.fillRect(0, footerY, config::OLED_WIDTH, kLineHeight, SSD1306_WHITE);
   display.setTextColor(SSD1306_BLACK);
   display.setCursor(0, footerY);
   display.print("Menu");
@@ -539,17 +633,26 @@ void drawStatusMenuPrompt() {
 }
 
 void drawMainMenu() {
-  for (size_t i = 0; i < kMainMenuCount; ++i) {
-    int y = static_cast<int>(i) * 8;
-    bool selected = static_cast<int>(i) == mainMenuIndex;
+  int visible = computeVisibleRows(0, 0);
+  if (visible <= 0) {
+    return;
+  }
+  ensureSelectionVisible(mainMenuScroll, mainMenuIndex, visible, kMainMenuCount);
+  for (int row = 0; row < visible; ++row) {
+    int index = mainMenuScroll + row;
+    if (index >= static_cast<int>(kMainMenuCount)) {
+      break;
+    }
+    int y = lineY(0, row);
+    bool selected = index == mainMenuIndex;
     if (selected) {
-      display.fillRect(0, y, config::OLED_WIDTH, 8, SSD1306_WHITE);
+      display.fillRect(0, y, config::OLED_WIDTH, kLineHeight, SSD1306_WHITE);
       display.setTextColor(SSD1306_BLACK);
     } else {
       display.setTextColor(SSD1306_WHITE);
     }
     display.setCursor(0, y);
-    display.print(kMainMenuItems[i]);
+    display.print(kMainMenuItems[index]);
     if (selected) {
       display.setTextColor(SSD1306_WHITE);
     }
@@ -559,24 +662,39 @@ void drawMainMenu() {
 void drawSetupMenu() {
   display.setCursor(0, 16);
   display.print("Setup");
-  for (size_t i = 0; i < kSetupMenuCount; ++i) {
-    int y = 26 + static_cast<int>(i) * 8;
-    bool selected = static_cast<int>(i) == setupMenuIndex;
+  constexpr int kListTop = 24;
+  constexpr int kFooterHeight = kLineHeight;
+  int visible = computeVisibleRows(kListTop, kFooterHeight);
+  if (visible <= 0) {
+    return;
+  }
+  ensureSelectionVisible(setupMenuScroll, setupMenuIndex, visible, kSetupMenuCount);
+  for (int row = 0; row < visible; ++row) {
+    int index = setupMenuScroll + row;
+    if (index >= static_cast<int>(kSetupMenuCount)) {
+      break;
+    }
+    int y = lineY(kListTop, row);
+    bool selected = index == setupMenuIndex;
     if (selected) {
-      display.fillRect(0, y, config::OLED_WIDTH, 8, SSD1306_WHITE);
+      display.fillRect(0, y, config::OLED_WIDTH, kLineHeight, SSD1306_WHITE);
       display.setTextColor(SSD1306_BLACK);
     } else {
       display.setTextColor(SSD1306_WHITE);
     }
     display.setCursor(0, y);
-    display.print(kSetupMenuItems[i]);
-    if (static_cast<int>(i) == kSetupMenuWifiIndex) {
+    display.print(kSetupMenuItems[index]);
+    if (index == kSetupMenuWifiIndex) {
       display.print(wifi_ota::isEnabled() ? ": On" : ": Off");
     }
     if (selected) {
       display.setTextColor(SSD1306_WHITE);
     }
   }
+  int footerY = config::OLED_HEIGHT - kFooterHeight;
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, footerY);
+  display.print("Joy=Next Enc=Select");
 }
 
 void drawRtcEditor() {
@@ -1197,14 +1315,17 @@ void render() {
 
   switch (uiState) {
     case UiState::StatusScreen:
-      drawStatus();
+      drawStatus(false);
       drawStatusMenuPrompt();
+      break;
+    case UiState::StatusDetails:
+      drawStatus(true);
       break;
     case UiState::MainMenu:
       drawMainMenu();
       break;
     case UiState::PolarAlign:
-      drawStatus();
+      drawStatus(false);
       display.setCursor(0, 36);
       display.print("Center Polaris");
       display.setCursor(0, 44);
@@ -1253,6 +1374,7 @@ void displayTask(void*) {
 
 void enterSetupMenu() {
   setupMenuIndex = 0;
+  setupMenuScroll = 0;
   setUiState(UiState::SetupMenu);
 }
 
@@ -1715,8 +1837,7 @@ void handleMainMenuInput(int delta) {
   switch (mainMenuIndex) {
     case 0:
       systemState.menuMode = MenuMode::Status;
-      setUiState(UiState::StatusScreen);
-      showInfo("Status ready", 1500);
+      setUiState(UiState::StatusDetails);
       break;
     case 1:
       startPolarAlignment();
@@ -2082,6 +2203,20 @@ void startTask() {
 void handleStatusScreenInput() {
   if (input::consumeEncoderClick()) {
     mainMenuIndex = 0;
+    mainMenuScroll = 0;
+    setUiState(UiState::MainMenu);
+  }
+}
+
+void handleStatusDetailsInput() {
+  if (input::consumeJoystickPress()) {
+    systemState.menuMode = MenuMode::Status;
+    setUiState(UiState::StatusScreen);
+    return;
+  }
+  if (input::consumeEncoderClick()) {
+    mainMenuIndex = 0;
+    mainMenuScroll = 0;
     setUiState(UiState::MainMenu);
   }
 }
@@ -2093,6 +2228,9 @@ void handleInput() {
   switch (uiState) {
     case UiState::StatusScreen:
       handleStatusScreenInput();
+      break;
+    case UiState::StatusDetails:
+      handleStatusDetailsInput();
       break;
     case UiState::MainMenu:
       handleMainMenuInput(delta);
