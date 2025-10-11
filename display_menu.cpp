@@ -611,6 +611,16 @@ void drawStatus(bool diagnostics) {
       }
     }
   }
+  if (uiState == UiState::StatusScreen) {
+    display.setCursor(0, 50);
+    display.printf("Joy:%+0.2f,%+0.2f", systemState.joystickX, systemState.joystickY);
+    display.setCursor(90, 50);
+    display.print(systemState.joystickButtonPressed ? "BTN" : "---");
+    display.setCursor(112, 50);
+    display.print(systemState.mountLinkReady ? "L" : "!");
+    display.setCursor(118, 50);
+    display.print(systemState.manualCommandOk ? "C" : "!");
+  }
 }
 
 void drawStatusMenuPrompt() {
