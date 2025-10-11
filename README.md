@@ -91,7 +91,7 @@ und irgendwann sagen: „Lauf, kleiner ESP, lauf mit den Sternen.“
 | Rotary-Encoder Button            | 5                  | Mit INPUT_PULLUP betreiben |
 | Joystick X (VRx)                 | 0                  | ADC, high impedance |
 | Joystick Y (VRy)                 | 1                  | ADC |
-| Joystick Button                  | 6                  | LOW-aktiv |
+| Joystick Button                  | 7                  | LOW-aktiv, ggf. externen Pull-up auf 3.3 V verwenden |
 | Gemeinsame Versorgung für HID    | 3.3 V / GND        | Alle Sensoren/Bedienelemente |
 
 #### Verbindung zwischen den beiden ESP32

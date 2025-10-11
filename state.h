@@ -16,9 +16,15 @@ struct SystemState {
   bool trackingActive;
   bool gotoActive;
   int selectedCatalogIndex;
+  int selectedCatalogTypeIndex;
   int64_t azGotoTarget;
   int64_t altGotoTarget;
   bool joystickActive;
+  float joystickX;
+  float joystickY;
+  bool joystickButtonPressed;
+  bool mountLinkReady;
+  bool manualCommandOk;
 };
 
 extern SystemState systemState;

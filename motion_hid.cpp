@@ -2,11 +2,14 @@
 
 #if defined(DEVICE_ROLE_HID)
 
+#include <cmath>
 #include <cstdlib>
 #include <initializer_list>
+#include <limits>
 #include <vector>
 
 #include "comm.h"
+#include "state.h"
 
 namespace {
 
@@ -24,6 +27,29 @@ double parseDouble(const String& value) {
   return strtod(value.c_str(), nullptr);
 }
 
+size_t axisIndex(Axis axis) { return (axis == Axis::Az) ? 0 : 1; }
+
+bool callAndUpdate(const char* command, std::initializer_list<String> params,
+                   std::vector<String>* payload = nullptr) {
+  bool success = comm::call(command, params, payload);
+  systemState.manualCommandOk = success;
+  return success;
+}
+
+float lastManualRpm[2] = {std::numeric_limits<float>::quiet_NaN(),
+                          std::numeric_limits<float>::quiet_NaN()};
+uint32_t lastManualSendMs[2] = {0, 0};
+
+constexpr float kManualRpmDelta = 0.02f;
+constexpr uint32_t kManualRefreshIntervalMs = 250;
+
+void invalidateManualCache() {
+  for (size_t i = 0; i < 2; ++i) {
+    lastManualRpm[i] = std::numeric_limits<float>::quiet_NaN();
+    lastManualSendMs[i] = 0;
+  }
+}
+
 }  // namespace
 
 namespace motion {
@@ -35,35 +61,64 @@ void init() {
 }
 
 void setManualRate(Axis axis, float rpm) {
-  comm::call("SET_MANUAL_RPM", {String(axisToString(axis)), formatFloat(rpm)});
+  size_t index = axisIndex(axis);
+  float previous = lastManualRpm[index];
+  uint32_t now = millis();
+
+  bool shouldSend = false;
+  if (!std::isfinite(previous)) {
+    shouldSend = true;
+  } else if (fabsf(previous - rpm) > kManualRpmDelta) {
+    shouldSend = true;
+  } else if (lastManualSendMs[index] == 0 ||
+             (now - lastManualSendMs[index]) >= kManualRefreshIntervalMs) {
+    shouldSend = true;
+  }
+
+  if (!shouldSend) {
+    return;
+  }
+
+  if (callAndUpdate("SET_MANUAL_RPM",
+                    {String(axisToString(axis)), formatFloat(rpm)})) {
+    lastManualRpm[index] = rpm;
+    lastManualSendMs[index] = now;
+  }
 }
 
 void setManualStepsPerSecond(Axis axis, double stepsPerSecond) {
-  comm::call("SET_MANUAL_SPS",
-             {String(axisToString(axis)), formatFloat(stepsPerSecond)});
+  if (callAndUpdate("SET_MANUAL_SPS",
+                    {String(axisToString(axis)), formatFloat(stepsPerSecond)})) {
+    lastManualRpm[axisIndex(axis)] = std::numeric_limits<float>::quiet_NaN();
+    lastManualSendMs[axisIndex(axis)] = 0;
+  }
 }
 
 void setGotoStepsPerSecond(Axis axis, double stepsPerSecond) {
-  comm::call("SET_GOTO_SPS",
-             {String(axisToString(axis)), formatFloat(stepsPerSecond)});
+  callAndUpdate("SET_GOTO_SPS",
+                {String(axisToString(axis)), formatFloat(stepsPerSecond)});
 }
 
-void clearGotoRates() { comm::call("CLEAR_GOTO", {}); }
+void clearGotoRates() { callAndUpdate("CLEAR_GOTO", {}); }
 
-void stopAll() { comm::call("STOP_ALL", {}); }
+void stopAll() {
+  if (callAndUpdate("STOP_ALL", {})) {
+    invalidateManualCache();
+  }
+}
 
 void setTrackingEnabled(bool enabled) {
-  comm::call("SET_TRACKING_ENABLED", {enabled ? "1" : "0"});
+  callAndUpdate("SET_TRACKING_ENABLED", {enabled ? "1" : "0"});
 }
 
 void setTrackingRates(double azDegPerSec, double altDegPerSec) {
-  comm::call("SET_TRACKING_RATES",
-             {formatFloat(azDegPerSec), formatFloat(altDegPerSec)});
+  callAndUpdate("SET_TRACKING_RATES",
+                {formatFloat(azDegPerSec), formatFloat(altDegPerSec)});
 }
 
 int64_t getStepCount(Axis axis) {
   std::vector<String> payload;
-  if (!comm::call("GET_STEP_COUNT", {String(axisToString(axis))}, &payload)) {
+  if (!callAndUpdate("GET_STEP_COUNT", {String(axisToString(axis))}, &payload)) {
     return 0;
   }
   if (payload.empty()) {
@@ -73,13 +128,16 @@ int64_t getStepCount(Axis axis) {
 }
 
 void setStepCount(Axis axis, int64_t value) {
-  comm::call("SET_STEP_COUNT",
-             {String(axisToString(axis)), String(value)});
+  if (callAndUpdate("SET_STEP_COUNT",
+                    {String(axisToString(axis)), String(value)})) {
+    lastManualRpm[axisIndex(axis)] = std::numeric_limits<float>::quiet_NaN();
+    lastManualSendMs[axisIndex(axis)] = 0;
+  }
 }
 
 double stepsToAzDegrees(int64_t steps) {
   std::vector<String> payload;
-  if (!comm::call("STEPS_TO_AZ", {String(steps)}, &payload)) {
+  if (!callAndUpdate("STEPS_TO_AZ", {String(steps)}, &payload)) {
     return 0.0;
   }
   if (payload.empty()) {
@@ -90,7 +148,7 @@ double stepsToAzDegrees(int64_t steps) {
 
 double stepsToAltDegrees(int64_t steps) {
   std::vector<String> payload;
-  if (!comm::call("STEPS_TO_ALT", {String(steps)}, &payload)) {
+  if (!callAndUpdate("STEPS_TO_ALT", {String(steps)}, &payload)) {
     return 0.0;
   }
   if (payload.empty()) {
@@ -101,7 +159,7 @@ double stepsToAltDegrees(int64_t steps) {
 
 int64_t azDegreesToSteps(double degrees) {
   std::vector<String> payload;
-  if (!comm::call("AZ_TO_STEPS", {formatFloat(degrees)}, &payload)) {
+  if (!callAndUpdate("AZ_TO_STEPS", {formatFloat(degrees)}, &payload)) {
     return 0;
   }
   if (payload.empty()) {
@@ -112,7 +170,7 @@ int64_t azDegreesToSteps(double degrees) {
 
 int64_t altDegreesToSteps(double degrees) {
   std::vector<String> payload;
-  if (!comm::call("ALT_TO_STEPS", {formatFloat(degrees)}, &payload)) {
+  if (!callAndUpdate("ALT_TO_STEPS", {formatFloat(degrees)}, &payload)) {
     return 0;
   }
   if (payload.empty()) {
@@ -122,21 +180,21 @@ int64_t altDegreesToSteps(double degrees) {
 }
 
 void applyCalibration(const AxisCalibration& calibration) {
-  comm::call("APPLY_CALIBRATION",
-             {formatFloat(calibration.stepsPerDegreeAz),
-              formatFloat(calibration.stepsPerDegreeAlt),
-              String(calibration.azHomeOffset),
-              String(calibration.altHomeOffset)});
+  callAndUpdate("APPLY_CALIBRATION",
+                {formatFloat(calibration.stepsPerDegreeAz),
+                 formatFloat(calibration.stepsPerDegreeAlt),
+                 String(calibration.azHomeOffset),
+                 String(calibration.altHomeOffset)});
 }
 
 void setBacklash(const BacklashConfig& backlash) {
-  comm::call("SET_BACKLASH",
-             {String(backlash.azSteps), String(backlash.altSteps)});
+  callAndUpdate("SET_BACKLASH",
+                {String(backlash.azSteps), String(backlash.altSteps)});
 }
 
 int32_t getBacklashSteps(Axis axis) {
   std::vector<String> payload;
-  if (!comm::call("GET_BACKLASH", {String(axisToString(axis))}, &payload)) {
+  if (!callAndUpdate("GET_BACKLASH", {String(axisToString(axis))}, &payload)) {
     return 0;
   }
   if (payload.empty()) {
@@ -147,7 +205,7 @@ int32_t getBacklashSteps(Axis axis) {
 
 int8_t getLastDirection(Axis axis) {
   std::vector<String> payload;
-  if (!comm::call("GET_LAST_DIR", {String(axisToString(axis))}, &payload)) {
+  if (!callAndUpdate("GET_LAST_DIR", {String(axisToString(axis))}, &payload)) {
     return 0;
   }
   if (payload.empty()) {
