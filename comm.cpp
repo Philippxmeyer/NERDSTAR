@@ -1,5 +1,6 @@
 #include "comm.h"
 
+#include <Arduino.h>
 #include <HardwareSerial.h>
 #include <algorithm>
 
@@ -16,10 +17,22 @@ uint16_t nextRequestId = 1;
 SemaphoreHandle_t rpcMutex = nullptr;
 #endif
 
+constexpr size_t kMaxLineLength = 160;
+#if defined(DEVICE_ROLE_HID)
+constexpr uint8_t kMaxCallRetries = 3;
+#endif
+
 // Buffer that accumulates incoming characters until a full line has been
 // received. This allows callers to use short timeouts without losing partial
 // data when no newline has arrived yet.
 String rxBuffer;
+
+void dropPendingInput() {
+  rxBuffer.clear();
+  while (uartLink.available()) {
+    uartLink.read();
+  }
+}
 
 bool readLine(String& line, uint32_t timeoutMs) {
   uint32_t start = millis();
@@ -36,6 +49,13 @@ bool readLine(String& line, uint32_t timeoutMs) {
       }
       if (c != '\r') {
         rxBuffer += c;
+        if (rxBuffer.length() > kMaxLineLength) {
+          if (Serial) {
+            Serial.println("[COMM] RX overflow, resetting buffer");
+          }
+          rxBuffer.clear();
+          break;
+        }
       }
     }
     if (timeoutMs != 0 && (millis() - start) >= timeoutMs) {
@@ -48,6 +68,7 @@ bool readLine(String& line, uint32_t timeoutMs) {
 void sendLine(const String& line) {
   uartLink.print(line);
   uartLink.print('\n');
+  uartLink.flush();
 }
 
 void splitFields(const String& line, std::vector<String>& fields) {
@@ -131,71 +152,87 @@ bool call(const char* command, std::initializer_list<String> params,
     }
     return false;
   }
-  if (payload) {
-    payload->clear();
-  }
-  uint16_t id = nextRequestId++;
-  String line = "REQ|" + String(id) + "|" + String(command);
-  for (const auto& param : params) {
-    line += "|";
-    line += param;
-  }
-  sendLine(line);
+  String lastError = "Timeout";
+  for (uint8_t attempt = 0; attempt < kMaxCallRetries; ++attempt) {
+    if (payload) {
+      payload->clear();
+    }
+    uint16_t id = nextRequestId++;
+    String line = "REQ|" + String(id) + "|" + String(command);
+    for (const auto& param : params) {
+      line += "|";
+      line += param;
+    }
+    if (attempt > 0 && Serial) {
+      Serial.printf("[COMM] Retrying %s (attempt %u, last error: %s)\n", command,
+                    attempt + 1, lastError.c_str());
+    }
+    sendLine(line);
 
-  uint32_t start = millis();
-  while (true) {
-    uint32_t remaining = 0;
-    if (timeoutMs != 0) {
-      uint32_t elapsed = millis() - start;
-      if (elapsed >= timeoutMs) {
-        if (error) {
-          *error = "Timeout";
+    uint32_t start = millis();
+    while (true) {
+      uint32_t remaining = 0;
+      if (timeoutMs != 0) {
+        uint32_t elapsed = millis() - start;
+        if (elapsed >= timeoutMs) {
+          lastError = "Timeout";
+          break;
         }
-        return false;
+        remaining = timeoutMs - elapsed;
       }
-      remaining = timeoutMs - elapsed;
-    }
-    String response;
-    if (!readLine(response, remaining)) {
-      if (error) {
-        *error = "Timeout";
+      String response;
+      if (!readLine(response, remaining)) {
+        lastError = "Timeout";
+        break;
       }
-      return false;
-    }
-    if (response == "READY") {
-      continue;
-    }
-    std::vector<String> fields;
-    splitFields(response, fields);
-    if (fields.empty()) {
-      continue;
-    }
-    if (fields[0] != "RESP") {
-      continue;
-    }
-    if (fields.size() < 3) {
-      continue;
-    }
-    uint16_t respId = static_cast<uint16_t>(fields[1].toInt());
-    if (respId != id) {
-      continue;
-    }
-    const String& status = fields[2];
-    if (status == "OK") {
-      if (payload) {
-        payload->assign(fields.begin() + 3, fields.end());
+      if (response == "READY") {
+        continue;
       }
-      return true;
-    }
-    if (error) {
+      std::vector<String> fields;
+      splitFields(response, fields);
+      if (fields.empty()) {
+        lastError = "Protocol";
+        continue;
+      }
+      if (fields[0] != "RESP") {
+        lastError = "Protocol";
+        continue;
+      }
+      if (fields.size() < 3) {
+        lastError = "Protocol";
+        continue;
+      }
+      uint16_t respId = static_cast<uint16_t>(fields[1].toInt());
+      if (respId != id) {
+        lastError = "Protocol";
+        continue;
+      }
+      const String& status = fields[2];
+      if (status == "OK") {
+        if (payload) {
+          payload->assign(fields.begin() + 3, fields.end());
+        }
+        return true;
+      }
       if (fields.size() > 3) {
-        *error = fields[3];
+        lastError = fields[3];
       } else {
-        *error = "Error";
+        lastError = "Error";
       }
+      break;
     }
-    return false;
+
+    dropPendingInput();
+    if (lastError != "Timeout" && lastError != "Protocol") {
+      break;
+    }
+    waitForReady(200);
   }
+
+  if (error) {
+    *error = lastError;
+  }
+  return false;
 }
 
 #elif defined(DEVICE_ROLE_MAIN)

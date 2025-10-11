@@ -17,9 +17,16 @@
 
 namespace {
 bool g_mountLinkReady = false;
+
+void initDebugSerial() {
+  Serial.begin(config::USB_DEBUG_BAUD);
+  delay(50);
+  Serial.println("[HID] Boot");
+}
 }
 
 void setup() {
+  initDebugSerial();
   wifi_ota::init();
   comm::initLink();
 
@@ -51,6 +58,10 @@ void setup() {
   display_menu::startTask();
 
   g_mountLinkReady = comm::waitForReady(5000);
+  if (Serial) {
+    Serial.println(g_mountLinkReady ? "[HID] Mount link ready"
+                                    : "[HID] Mount link offline");
+  }
   if (!g_mountLinkReady) {
     display_menu::showInfo("Mount link offline", 2000);
   }
@@ -93,6 +104,9 @@ void loop() {
       g_mountLinkReady = true;
       systemState.manualCommandOk = true;
       display_menu::showInfo("Mount link ready", 2000);
+      if (Serial) {
+        Serial.println("[HID] Mount link re-established");
+      }
     }
   }
   systemState.mountLinkReady = g_mountLinkReady;
@@ -117,6 +131,12 @@ namespace {
 
 TaskHandle_t motorTaskHandle = nullptr;
 TaskHandle_t commandTaskHandle = nullptr;
+
+void initDebugSerial() {
+  Serial.begin(config::USB_DEBUG_BAUD);
+  delay(50);
+  Serial.println("[MAIN] Boot");
+}
 
 bool parseAxis(const String& value, Axis& outAxis) {
   if (value.equalsIgnoreCase("AZ")) {
@@ -286,6 +306,7 @@ void motorTask(void*) {
 }  // namespace
 
 void setup() {
+  initDebugSerial();
   wifi_ota::init();
   comm::initLink();
   storage::init();
@@ -297,6 +318,9 @@ void setup() {
                           1);
   xTaskCreatePinnedToCore(commandTask, "cmd", 8192, nullptr, 2,
                           &commandTaskHandle, 0);
+  if (Serial) {
+    Serial.println("[MAIN] Tasks started");
+  }
 }
 
 void loop() {
