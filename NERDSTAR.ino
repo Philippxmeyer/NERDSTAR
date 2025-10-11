@@ -260,13 +260,22 @@ void handleRequest(const comm::Request& request) {
 }
 
 void commandTask(void*) {
+  constexpr uint32_t kReadyIntervalMs = 500;
+  uint32_t lastReadyMs = 0;
   comm::announceReady();
+  lastReadyMs = millis();
   while (true) {
     comm::Request request;
-    if (!comm::readRequest(request, 0)) {
-      continue;
+    if (comm::readRequest(request, 100)) {
+      handleRequest(request);
+      lastReadyMs = millis();
+    } else {
+      uint32_t now = millis();
+      if ((now - lastReadyMs) >= kReadyIntervalMs) {
+        comm::announceReady();
+        lastReadyMs = now;
+      }
     }
-    handleRequest(request);
   }
 }
 
