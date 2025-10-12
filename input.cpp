@@ -2,82 +2,32 @@
 
 #if defined(DEVICE_ROLE_HID)
 
+#include <AiEsp32RotaryEncoder.h>
 #include <math.h>
-#include <stdint.h>
-
-#include <esp_timer.h>
 
 #include "config.h"
 
 namespace {
 
-portMUX_TYPE encoderMux = portMUX_INITIALIZER_UNLOCKED;
-volatile int encoderTicks = 0;
-volatile uint8_t encoderState = 0;
-volatile int8_t encoderStepAccumulator = 0;
-volatile bool encoderClick = false;
-volatile bool joystickClick = false;
-volatile uint64_t lastEncoderButtonUs = 0;
-
-constexpr uint32_t ENCODER_DEBOUNCE_US = 5000;
 constexpr int kEncoderStepsPerNotch = 4;
+constexpr long kEncoderMinValue = -100000;
+constexpr long kEncoderMaxValue = 100000;
+constexpr uint32_t kAccelerationResetMs = 400;
+constexpr int kMaxAcceleratedStep = 6;
 
-constexpr int8_t kTransitionTable[4][4] = {
-    {0, -1, 1, 0},
-    {1, 0, 0, -1},
-    {-1, 0, 0, 1},
-    {0, 1, -1, 0},
-};
+AiEsp32RotaryEncoder rotaryEncoder(config::ROT_A, config::ROT_B, config::ROT_BTN, -1);
 
 JoystickCalibration currentCalibration{2048, 2048};
+bool joystickClick = false;
 bool lastJoystickState = false;
 
-constexpr int8_t kQuadratureTable[16] = {
-    0,  -1, 1,  0,   // 00 -> 00/01/10/11
-    1,  0,  0,  -1,  // 01 -> 00/01/10/11
-    -1, 0,  0,  1,   // 10 -> 00/01/10/11
-    0,  1,  -1, 0};  // 11 -> 00/01/10/11
+long lastEncoderValue = 0;
+uint32_t lastEncoderEventMs = 0;
+float encoderAccelerationRemainder = 0.0f;
 
-void IRAM_ATTR updateEncoderState() {
-  uint8_t a = static_cast<uint8_t>(digitalRead(config::ROT_A));
-  uint8_t b = static_cast<uint8_t>(digitalRead(config::ROT_B));
-  uint8_t current = static_cast<uint8_t>((a << 1) | b);
-  uint8_t previous = encoderState & 0x03;
-  uint8_t index = static_cast<uint8_t>((previous << 2) | current);
-  encoderState = current;
-  int8_t movement = kQuadratureTable[index];
-  encoderStepAccumulator += movement;
-  if (encoderStepAccumulator >= 4) {
-    encoderTicks++;
-    encoderStepAccumulator = 0;
-  } else if (encoderStepAccumulator <= -4) {
-    encoderTicks--;
-    encoderStepAccumulator = 0;
-  }
-}
+void IRAM_ATTR handleEncoderISR() { rotaryEncoder.readEncoder_ISR(); }
 
-void IRAM_ATTR handleEncoderPinA() {
-  portENTER_CRITICAL_ISR(&encoderMux);
-  updateEncoderState();
-  portEXIT_CRITICAL_ISR(&encoderMux);
-}
-
-void IRAM_ATTR handleEncoderPinB() {
-  portENTER_CRITICAL_ISR(&encoderMux);
-  updateEncoderState();
-  portEXIT_CRITICAL_ISR(&encoderMux);
-}
-
-void IRAM_ATTR handleEncoderButton() {
-  uint64_t now = esp_timer_get_time();
-  if (now - lastEncoderButtonUs < ENCODER_DEBOUNCE_US) {
-    return;
-  }
-  if (digitalRead(config::ROT_BTN) == LOW) {
-    lastEncoderButtonUs = now;
-    encoderClick = true;
-  }
-}
+void IRAM_ATTR handleEncoderButtonISR() { rotaryEncoder.readButton_ISR(); }
 
 void updateJoystickButton() {
   bool pressed = (digitalRead(config::JOY_BTN) == LOW);
@@ -87,7 +37,49 @@ void updateJoystickButton() {
   lastJoystickState = pressed;
 }
 
-} // namespace
+int applySoftAcceleration(int rawDelta) {
+  if (rawDelta == 0) {
+    return 0;
+  }
+
+  uint32_t now = millis();
+  uint32_t elapsed = now - lastEncoderEventMs;
+  lastEncoderEventMs = now;
+
+  if (elapsed > kAccelerationResetMs) {
+    encoderAccelerationRemainder = 0.0f;
+  }
+
+  float factor = 1.0f;
+  if (elapsed <= 40) {
+    factor = 2.0f;
+  } else if (elapsed <= 100) {
+    factor = 1.6f;
+  } else if (elapsed <= 180) {
+    factor = 1.3f;
+  }
+
+  float scaled = static_cast<float>(rawDelta) * factor + encoderAccelerationRemainder;
+  int accelerated = static_cast<int>(scaled);
+  encoderAccelerationRemainder = scaled - static_cast<float>(accelerated);
+
+  if (accelerated == 0) {
+    accelerated = (rawDelta > 0) ? 1 : -1;
+    encoderAccelerationRemainder = scaled - static_cast<float>(accelerated);
+  }
+
+  if (accelerated > kMaxAcceleratedStep) {
+    encoderAccelerationRemainder += static_cast<float>(accelerated - kMaxAcceleratedStep);
+    accelerated = kMaxAcceleratedStep;
+  } else if (accelerated < -kMaxAcceleratedStep) {
+    encoderAccelerationRemainder += static_cast<float>(accelerated + kMaxAcceleratedStep);
+    accelerated = -kMaxAcceleratedStep;
+  }
+
+  return accelerated;
+}
+
+}  // namespace
 
 namespace input {
 
@@ -97,13 +89,16 @@ void init() {
   pinMode(config::ROT_B, INPUT_PULLUP);
   pinMode(config::ROT_BTN, INPUT_PULLUP);
 
-  encoderState = static_cast<uint8_t>((digitalRead(config::ROT_A) << 1) |
-                                      digitalRead(config::ROT_B));
-  encoderStepAccumulator = 0;
+  rotaryEncoder.begin();
+  rotaryEncoder.setup(handleEncoderISR, handleEncoderButtonISR);
+  rotaryEncoder.setEncoderStepsPerNotch(kEncoderStepsPerNotch);
+  rotaryEncoder.setBoundaries(kEncoderMinValue, kEncoderMaxValue, true);
+  rotaryEncoder.disableAcceleration();
+  rotaryEncoder.reset(0);
 
-  attachInterrupt(digitalPinToInterrupt(config::ROT_A), handleEncoderPinA, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(config::ROT_B), handleEncoderPinB, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(config::ROT_BTN), handleEncoderButton, FALLING);
+  lastEncoderValue = rotaryEncoder.readEncoder();
+  lastEncoderEventMs = millis();
+  encoderAccelerationRemainder = 0.0f;
 
   analogReadResolution(12);
 }
@@ -123,6 +118,7 @@ JoystickCalibration calibrateJoystick() {
 }
 
 void update() {
+  rotaryEncoder.loop();
   updateJoystickButton();
 }
 
@@ -157,26 +153,27 @@ bool consumeJoystickPress() {
 bool isJoystickButtonPressed() { return lastJoystickState; }
 
 int consumeEncoderDelta() {
-  portENTER_CRITICAL(&encoderMux);
-  int delta = encoderTicks;
-  encoderTicks = 0;
-  portEXIT_CRITICAL(&encoderMux);
-  return delta;
+  long current = rotaryEncoder.readEncoder();
+  int rawDelta = static_cast<int>(current - lastEncoderValue);
+  if (rawDelta == 0) {
+    return 0;
+  }
+  lastEncoderValue = current;
+
+  if (rawDelta > kMaxAcceleratedStep || rawDelta < -kMaxAcceleratedStep) {
+    encoderAccelerationRemainder = 0.0f;
+    return rawDelta;
+  }
+
+  int accelerated = applySoftAcceleration(rawDelta);
+  return accelerated;
 }
 
-bool consumeEncoderClick() {
-  bool clicked = encoderClick;
-  encoderClick = false;
-  return clicked;
-}
+bool consumeEncoderClick() { return rotaryEncoder.isEncoderButtonClicked(); }
 
-int getJoystickCenterX() {
-  return currentCalibration.centerX;
-}
+int getJoystickCenterX() { return currentCalibration.centerX; }
 
-int getJoystickCenterY() {
-  return currentCalibration.centerY;
-}
+int getJoystickCenterY() { return currentCalibration.centerY; }
 
 void setJoystickCalibration(const JoystickCalibration& calibration) {
   currentCalibration = calibration;

@@ -40,7 +40,8 @@ enum class UiState {
   SetRtc,
   LocationSetup,
   CatalogTypeBrowser,
-  CatalogBrowser,
+  CatalogItemList,
+  CatalogItemDetail,
   AxisCalibration,
   GotoSpeed,
   GotoCoordinates,
@@ -206,6 +207,9 @@ constexpr int kSetupMenuBackIndex = 7;
 int catalogTypeIndex = 0;
 int catalogTypeObjectIndex = 0;
 int catalogIndex = 0;
+int catalogItemScroll = 0;
+int catalogDetailMenuIndex = 0;
+constexpr int kCatalogDetailMenuCount = 2;
 
 String infoMessage;
 uint32_t infoUntil = 0;
@@ -817,10 +821,69 @@ void drawCatalogTypeMenu() {
   display.setCursor(0, 36);
   display.printf("Objects: %u", static_cast<unsigned>(summary.objectCount));
   display.setCursor(0, 52);
-  display.print("Enc=Browse Joy=Back");
+  display.print("Enc=Open Joy=Back");
 }
 
-void drawCatalog() {
+void drawCatalogItemList() {
+  CatalogTypeSummary summary{};
+  if (!catalog::getTypeSummary(static_cast<size_t>(catalogTypeIndex), summary) ||
+      summary.objectCount == 0) {
+    display.setCursor(0, 10);
+    display.print("Catalog");
+    display.setCursor(0, 20);
+    display.print("No entries");
+    display.setCursor(0, 52);
+    display.print("Enc=Back Joy=Types");
+    return;
+  }
+
+  int localCount = static_cast<int>(summary.objectCount);
+  while (catalogTypeObjectIndex < 0) catalogTypeObjectIndex += localCount;
+  while (catalogTypeObjectIndex >= localCount) catalogTypeObjectIndex -= localCount;
+
+  int top = 20;
+  int bottomMargin = kLineHeight;
+  int visibleRows = computeVisibleRows(top, bottomMargin);
+  ensureSelectionVisible(catalogItemScroll, catalogTypeObjectIndex, visibleRows, summary.objectCount);
+
+  display.setCursor(0, 10);
+  display.print(summary.name);
+  display.setCursor(config::OLED_WIDTH - 36, 10);
+  display.printf("%d/%d", catalogTypeObjectIndex + 1, localCount);
+
+  for (int row = 0; row < visibleRows; ++row) {
+    int localIndex = catalogItemScroll + row;
+    if (localIndex >= localCount) {
+      break;
+    }
+    bool selected = (localIndex == catalogTypeObjectIndex);
+    int y = lineY(top, row);
+    display.fillRect(0, y, config::OLED_WIDTH, kLineHeight, selected ? SSD1306_WHITE : SSD1306_BLACK);
+    display.setTextColor(selected ? SSD1306_BLACK : SSD1306_WHITE);
+
+    size_t globalIndex = 0;
+    String label = "(invalid)";
+    if (catalog::getTypeObjectIndex(static_cast<size_t>(catalogTypeIndex),
+                                    static_cast<size_t>(localIndex), globalIndex)) {
+      const CatalogObject* object = catalog::get(globalIndex);
+      if (object) {
+        label = sanitizeForDisplay(object->name);
+        if (selected) {
+          catalogIndex = static_cast<int>(globalIndex);
+        }
+      }
+    }
+
+    display.setCursor(0, y);
+    display.print(label);
+  }
+
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, config::OLED_HEIGHT - kLineHeight);
+  display.print("Enc=Info Joy=Types");
+}
+
+void drawCatalogItemDetail() {
   CatalogTypeSummary summary{};
   if (!catalog::getTypeSummary(static_cast<size_t>(catalogTypeIndex), summary) ||
       summary.objectCount == 0) {
@@ -834,6 +897,10 @@ void drawCatalog() {
   int localCount = static_cast<int>(summary.objectCount);
   while (catalogTypeObjectIndex < 0) catalogTypeObjectIndex += localCount;
   while (catalogTypeObjectIndex >= localCount) catalogTypeObjectIndex -= localCount;
+
+  if (catalogDetailMenuIndex < 0 || catalogDetailMenuIndex >= kCatalogDetailMenuCount) {
+    catalogDetailMenuIndex = 0;
+  }
 
   size_t globalIndex = 0;
   if (!catalog::getTypeObjectIndex(static_cast<size_t>(catalogTypeIndex),
@@ -869,10 +936,12 @@ void drawCatalog() {
   double azDeg = 0.0;
   double altDeg = -90.0;
   bool above = raDecToAltAz(now, ra, dec, azDeg, altDeg);
+  String objectName = sanitizeForDisplay(object->name);
+  String objectType = sanitizeForDisplay(object->type);
   display.setCursor(0, 20);
-  display.print(object->name);
+  display.print(objectName);
   display.setCursor(0, 28);
-  display.print(object->type);
+  display.print(objectType);
   display.setCursor(0, 36);
   display.print("RA: ");
   display.print(raBuffer);
@@ -880,11 +949,24 @@ void drawCatalog() {
   display.print("Dec: ");
   display.print(decBuffer);
   display.setCursor(0, 52);
-  display.printf("Alt: %+.1f%c Joy=Types", altDeg, kDegreeSymbol);
-  display.setCursor(0, 60);
-  display.printf("Mag: %.1f %s", object->magnitude, above ? "" : "(below)");
-  display.setCursor(78, 60);
-  display.print("Enc=Go");
+  display.printf("Alt:%+.1f%c Mag: %.1f", altDeg, kDegreeSymbol, object->magnitude);
+  if (!above) {
+    display.print(" (below)");
+  }
+
+  int menuY = config::OLED_HEIGHT - kLineHeight;
+  const char* labels[kCatalogDetailMenuCount] = {"Goto", "Back"};
+  for (int i = 0; i < kCatalogDetailMenuCount; ++i) {
+    bool selected = (catalogDetailMenuIndex == i);
+    int x = (config::OLED_WIDTH / kCatalogDetailMenuCount) * i;
+    int width = (i == kCatalogDetailMenuCount - 1) ? (config::OLED_WIDTH - x)
+                                                   : (config::OLED_WIDTH / kCatalogDetailMenuCount);
+    display.fillRect(x, menuY, width, kLineHeight, selected ? SSD1306_WHITE : SSD1306_BLACK);
+    display.setTextColor(selected ? SSD1306_BLACK : SSD1306_WHITE);
+    display.setCursor(x + 2, menuY);
+    display.print(labels[i]);
+  }
+  display.setTextColor(SSD1306_WHITE);
 }
 
 void drawAxisCalibration() {
@@ -1345,8 +1427,11 @@ void render() {
     case UiState::CatalogTypeBrowser:
       drawCatalogTypeMenu();
       break;
-    case UiState::CatalogBrowser:
-      drawCatalog();
+    case UiState::CatalogItemList:
+      drawCatalogItemList();
+      break;
+    case UiState::CatalogItemDetail:
+      drawCatalogItemDetail();
       break;
     case UiState::AxisCalibration:
       drawAxisCalibration();
@@ -1888,6 +1973,8 @@ void handleMainMenuInput(int delta) {
         }
 
         catalogTypeIndex = targetType;
+        catalogItemScroll = 0;
+        catalogDetailMenuIndex = 0;
 
         CatalogTypeSummary summary{};
         if (!catalog::getTypeSummary(static_cast<size_t>(catalogTypeIndex), summary) ||
@@ -1908,6 +1995,8 @@ void handleMainMenuInput(int delta) {
           } else {
             catalogIndex = static_cast<int>(globalIndex);
           }
+          int visibleRows = computeVisibleRows(20, kLineHeight);
+          ensureSelectionVisible(catalogItemScroll, catalogTypeObjectIndex, visibleRows, summary.objectCount);
         }
 
         systemState.menuMode = MenuMode::Catalog;
@@ -2042,6 +2131,7 @@ void handleCatalogTypeInput(int delta) {
     while (catalogTypeIndex < 0) catalogTypeIndex += total;
     while (catalogTypeIndex >= total) catalogTypeIndex -= total;
     catalogTypeObjectIndex = 0;
+    catalogItemScroll = 0;
   }
 
   if (input::consumeJoystickPress()) {
@@ -2067,11 +2157,13 @@ void handleCatalogTypeInput(int delta) {
       return;
     }
     catalogIndex = static_cast<int>(globalIndex);
-    setUiState(UiState::CatalogBrowser);
+    catalogDetailMenuIndex = 0;
+    systemState.selectedCatalogTypeIndex = catalogTypeIndex;
+    setUiState(UiState::CatalogItemList);
   }
 }
 
-void handleCatalogInput(int delta) {
+void handleCatalogItemListInput(int delta) {
   if (catalog::size() == 0 || catalog::typeGroupCount() == 0) {
     bool exit = input::consumeEncoderClick();
     if (!exit) {
@@ -2092,11 +2184,14 @@ void handleCatalogInput(int delta) {
   }
 
   int total = static_cast<int>(summary.objectCount);
+  int visibleRows = computeVisibleRows(20, kLineHeight);
   if (delta != 0) {
     catalogTypeObjectIndex += delta;
     while (catalogTypeObjectIndex < 0) catalogTypeObjectIndex += total;
     while (catalogTypeObjectIndex >= total) catalogTypeObjectIndex -= total;
   }
+
+  ensureSelectionVisible(catalogItemScroll, catalogTypeObjectIndex, visibleRows, summary.objectCount);
 
   size_t globalIndex = 0;
   if (!catalog::getTypeObjectIndex(static_cast<size_t>(catalogTypeIndex),
@@ -2107,20 +2202,71 @@ void handleCatalogInput(int delta) {
   }
   catalogIndex = static_cast<int>(globalIndex);
 
-  bool select = input::consumeEncoderClick();
-  if (select) {
-    systemState.selectedCatalogIndex = catalogIndex;
+  if (input::consumeEncoderClick()) {
+    catalogDetailMenuIndex = 0;
     systemState.selectedCatalogTypeIndex = catalogTypeIndex;
-    const CatalogObject* object = catalog::get(globalIndex);
-    if (object) {
-      if (startGotoToObject(*object, catalogIndex)) {
+    setUiState(UiState::CatalogItemDetail);
+    return;
+  }
+
+  if (input::consumeJoystickPress()) {
+    setUiState(UiState::CatalogTypeBrowser);
+  }
+}
+
+void handleCatalogItemDetailInput(int delta) {
+  if (catalog::size() == 0 || catalog::typeGroupCount() == 0) {
+    setUiState(UiState::CatalogTypeBrowser);
+    return;
+  }
+
+  CatalogTypeSummary summary{};
+  if (!catalog::getTypeSummary(static_cast<size_t>(catalogTypeIndex), summary) ||
+      summary.objectCount == 0) {
+    showInfo("Empty type");
+    setUiState(UiState::CatalogTypeBrowser);
+    return;
+  }
+
+  if (catalogTypeObjectIndex < 0 || catalogTypeObjectIndex >= static_cast<int>(summary.objectCount)) {
+    catalogTypeObjectIndex = 0;
+  }
+
+  size_t globalIndex = 0;
+  if (!catalog::getTypeObjectIndex(static_cast<size_t>(catalogTypeIndex),
+                                   static_cast<size_t>(catalogTypeObjectIndex), globalIndex)) {
+    showInfo("Invalid entry");
+    setUiState(UiState::CatalogTypeBrowser);
+    return;
+  }
+
+  catalogIndex = static_cast<int>(globalIndex);
+  if (catalogDetailMenuIndex < 0 || catalogDetailMenuIndex >= kCatalogDetailMenuCount) {
+    catalogDetailMenuIndex = 0;
+  }
+  if (delta != 0) {
+    catalogDetailMenuIndex += delta;
+    while (catalogDetailMenuIndex < 0) catalogDetailMenuIndex += kCatalogDetailMenuCount;
+    while (catalogDetailMenuIndex >= kCatalogDetailMenuCount) catalogDetailMenuIndex -= kCatalogDetailMenuCount;
+  }
+
+  if (input::consumeEncoderClick()) {
+    if (catalogDetailMenuIndex == 0) {
+      systemState.selectedCatalogIndex = catalogIndex;
+      systemState.selectedCatalogTypeIndex = catalogTypeIndex;
+      const CatalogObject* object = catalog::get(globalIndex);
+      if (object && startGotoToObject(*object, catalogIndex)) {
         selectedObjectName = sanitizeForDisplay(object->name);
         gotoTargetName = sanitizeForDisplay(object->name);
       }
+    } else {
+      setUiState(UiState::CatalogItemList);
+      return;
     }
   }
+
   if (input::consumeJoystickPress()) {
-    setUiState(UiState::CatalogTypeBrowser);
+    setUiState(UiState::CatalogItemList);
   }
 }
 
@@ -2250,8 +2396,11 @@ void handleInput() {
     case UiState::CatalogTypeBrowser:
       handleCatalogTypeInput(delta);
       break;
-    case UiState::CatalogBrowser:
-      handleCatalogInput(delta);
+    case UiState::CatalogItemList:
+      handleCatalogItemListInput(delta);
+      break;
+    case UiState::CatalogItemDetail:
+      handleCatalogItemDetailInput(delta);
       break;
     case UiState::AxisCalibration: {
       if (input::consumeJoystickPress()) {
