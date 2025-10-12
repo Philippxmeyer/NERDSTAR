@@ -22,17 +22,17 @@ Diese Anleitung führt dich Schritt für Schritt durch Inbetriebnahme und Bedien
      - DEC-Treiber: STEP 13, DIR 12, EN 14
      - PDN/UART (MS1) & MS2 der TMC2209 mit Pull-ups (z. B. 10 kΩ nach VIO) auf HIGH legen → 1/16 Mikroschritt fest eingestellt
      - Gemeinsame Versorgung 5 V und GND zu beiden TMC2209-Modulen
-   - **ESP32-C3 (HID)** → Eingabe- & Anzeigeeinheit
-     - OLED & RTC: SDA 8 / SCL 9 (I²C, 3.3 V/GND)
-     - Rotary-Encoder: A 3, B 4, Button 5
-    - Joystick: VRx 0, VRy 1, Button 6 (LOW-aktiv, bei Bedarf externen Pull-up auf 3.3 V ergänzen)
-   - **ESP32 ↔ ESP32-C3 (UART-Link)**
-     - Main-TX (17) → HID-RX (20), Main-RX (16) ← HID-TX (21)
+   - **ESP32-WROOM (HID)** → Eingabe- & Anzeigeeinheit
+     - OLED & RTC: SDA 21 / SCL 22 (I²C, 3.3 V/GND)
+     - Rotary-Encoder: A 18, B 19, Button 23
+     - Joystick: VRx 34, VRy 35, Button 27 (LOW-aktiv, interner Pull-up verfügbar)
+   - **ESP32 ↔ ESP32-WROOM (UART-Link)**
+     - Main-TX (17) → HID-RX (16), Main-RX (16) ← HID-TX (17)
      - Gemeinsame Masse verbinden (GND ↔ GND)
      - Hinweis: Der Link nutzt einen dedizierten Hardware-UART. USB-Debug-Ausgaben bleiben unabhängig.
 5. **Firmware flashen**
    - Bibliotheken installieren (`Adafruit_SSD1306`, `Adafruit_GFX`, `RTClib`)
-   - Sketch `NERDSTAR.ino` mit den neuen Modulen kompilieren und auf die Boards flashen (HID: Board `ESP32C3 Dev Module`, Main: `ESP32 Dev Module`).
+   - Sketch `NERDSTAR.ino` mit den neuen Modulen kompilieren und auf die Boards flashen (HID & Main: Board `ESP32 Dev Module`).
    - USB-Seriell (115200 Baud) zeigt beim Booten Statusmeldungen beider Controller.
 
 ## 2. Erstinbetriebnahme
