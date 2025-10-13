@@ -153,6 +153,7 @@ void Comms::handleIncoming(uint16_t size) {
   }
 
   lastRxMs_ = millis();
+  recordSuccessfulTransfer();
 
   if (type == FrameType::kHeartbeat) {
     lastHeartbeatSeenMs_ = lastRxMs_;
@@ -194,6 +195,13 @@ void Comms::handleErrorStatus(int16_t status) {
   stats_.crcErrors++;
   if (callbacks_.onError) {
     callbacks_.onError(lastError_, status, callbacks_.context);
+  }
+}
+
+void Comms::recordSuccessfulTransfer() {
+  lastTransferStatus_ = 0;
+  if (lastError_ == Error::kSerialTransfer) {
+    lastError_ = Error::kNone;
   }
 }
 

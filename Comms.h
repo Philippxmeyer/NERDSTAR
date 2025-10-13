@@ -195,6 +195,7 @@ class Comms {
   void handleErrorStatus(int16_t status);
   void sendHeartbeat(uint32_t now);
   void updateLinkState(uint32_t now);
+  void recordSuccessfulTransfer();
 
   HardwareSerial* serial_ = nullptr;
   SerialTransfer transfer_;
