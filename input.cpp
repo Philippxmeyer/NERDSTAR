@@ -4,6 +4,8 @@
 
 #include <AiEsp32RotaryEncoder.h>
 #include <math.h>
+#include <type_traits>
+#include <utility>
 
 #include "config.h"
 
@@ -16,6 +18,122 @@ constexpr uint32_t kAccelerationResetMs = 400;
 constexpr int kMaxAcceleratedStep = 6;
 
 AiEsp32RotaryEncoder rotaryEncoder(config::ROT_A, config::ROT_B, config::ROT_BTN, -1);
+
+template <typename...>
+using void_t = void;
+
+template <typename T, typename = void>
+struct HasSetEncoderStepsPerNotch : std::false_type {};
+
+template <typename T>
+struct HasSetEncoderStepsPerNotch<
+    T, void_t<decltype(std::declval<T&>().setEncoderStepsPerNotch(0))>>
+    : std::true_type {};
+
+template <typename T, typename = void>
+struct HasSetStepsPerNotch : std::false_type {};
+
+template <typename T>
+struct HasSetStepsPerNotch<
+    T, void_t<decltype(std::declval<T&>().setStepsPerNotch(0))>>
+    : std::true_type {};
+
+template <typename T, typename = void>
+struct HasSetStepsPerClick : std::false_type {};
+
+template <typename T>
+struct HasSetStepsPerClick<
+    T, void_t<decltype(std::declval<T&>().setStepsPerClick(0))>>
+    : std::true_type {};
+
+template <typename T, typename = void>
+struct HasLoop : std::false_type {};
+
+template <typename T>
+struct HasLoop<T, void_t<decltype(std::declval<T&>().loop())>>
+    : std::true_type {};
+
+template <typename T, typename = void>
+struct HasTick : std::false_type {};
+
+template <typename T>
+struct HasTick<T, void_t<decltype(std::declval<T&>().tick())>>
+    : std::true_type {};
+
+template <typename T>
+struct EncoderSupportsStepConfiguration
+    : std::integral_constant<bool, HasSetEncoderStepsPerNotch<T>::value ||
+                                       HasSetStepsPerNotch<T>::value ||
+                                       HasSetStepsPerClick<T>::value> {};
+
+template <typename Encoder>
+typename std::enable_if<HasSetEncoderStepsPerNotch<Encoder>::value>::type
+ConfigureEncoderSteps(Encoder& encoder) {
+  encoder.setEncoderStepsPerNotch(kEncoderStepsPerNotch);
+}
+
+template <typename Encoder>
+typename std::enable_if<!HasSetEncoderStepsPerNotch<Encoder>::value &&
+                        HasSetStepsPerNotch<Encoder>::value>::type
+ConfigureEncoderSteps(Encoder& encoder) {
+  encoder.setStepsPerNotch(kEncoderStepsPerNotch);
+}
+
+template <typename Encoder>
+typename std::enable_if<!HasSetEncoderStepsPerNotch<Encoder>::value &&
+                        !HasSetStepsPerNotch<Encoder>::value &&
+                        HasSetStepsPerClick<Encoder>::value>::type
+ConfigureEncoderSteps(Encoder& encoder) {
+  encoder.setStepsPerClick(kEncoderStepsPerNotch);
+}
+
+template <typename Encoder>
+typename std::enable_if<!HasSetEncoderStepsPerNotch<Encoder>::value &&
+                        !HasSetStepsPerNotch<Encoder>::value &&
+                        !HasSetStepsPerClick<Encoder>::value>::type
+ConfigureEncoderSteps(Encoder&) {}
+
+template <typename Encoder>
+typename std::enable_if<EncoderSupportsStepConfiguration<Encoder>::value>::type
+ConfigureEncoderBoundaries(Encoder& encoder) {
+  encoder.setBoundaries(kEncoderMinValue, kEncoderMaxValue, true);
+}
+
+template <typename Encoder>
+typename std::enable_if<!EncoderSupportsStepConfiguration<Encoder>::value>::type
+ConfigureEncoderBoundaries(Encoder& encoder) {
+  encoder.setBoundaries(kEncoderMinValue * kEncoderStepsPerNotch,
+                        kEncoderMaxValue * kEncoderStepsPerNotch, true);
+}
+
+template <typename Encoder>
+typename std::enable_if<HasLoop<Encoder>::value>::type
+ServiceEncoder(Encoder& encoder) {
+  encoder.loop();
+}
+
+template <typename Encoder>
+typename std::enable_if<!HasLoop<Encoder>::value && HasTick<Encoder>::value>::type
+ServiceEncoder(Encoder& encoder) {
+  encoder.tick();
+}
+
+template <typename Encoder>
+typename std::enable_if<!HasLoop<Encoder>::value && !HasTick<Encoder>::value>::type
+ServiceEncoder(Encoder&) {}
+
+template <typename Encoder>
+typename std::enable_if<EncoderSupportsStepConfiguration<Encoder>::value, long>::type
+ReadEncoderValue(Encoder& encoder) {
+  return encoder.readEncoder();
+}
+
+template <typename Encoder>
+typename std::enable_if<!EncoderSupportsStepConfiguration<Encoder>::value, long>::type
+ReadEncoderValue(Encoder& encoder) {
+  long raw = encoder.readEncoder();
+  return raw / kEncoderStepsPerNotch;
+}
 
 JoystickCalibration currentCalibration{2048, 2048};
 bool joystickClick = false;
@@ -91,12 +209,12 @@ void init() {
 
   rotaryEncoder.begin();
   rotaryEncoder.setup(handleEncoderISR, handleEncoderButtonISR);
-  rotaryEncoder.setEncoderStepsPerNotch(kEncoderStepsPerNotch);
-  rotaryEncoder.setBoundaries(kEncoderMinValue, kEncoderMaxValue, true);
+  ConfigureEncoderSteps(rotaryEncoder);
+  ConfigureEncoderBoundaries(rotaryEncoder);
   rotaryEncoder.disableAcceleration();
   rotaryEncoder.reset(0);
 
-  lastEncoderValue = rotaryEncoder.readEncoder();
+  lastEncoderValue = ReadEncoderValue(rotaryEncoder);
   lastEncoderEventMs = millis();
   encoderAccelerationRemainder = 0.0f;
 
@@ -118,7 +236,7 @@ JoystickCalibration calibrateJoystick() {
 }
 
 void update() {
-  rotaryEncoder.loop();
+  ServiceEncoder(rotaryEncoder);
   updateJoystickButton();
 }
 
@@ -153,7 +271,7 @@ bool consumeJoystickPress() {
 bool isJoystickButtonPressed() { return lastJoystickState; }
 
 int consumeEncoderDelta() {
-  long current = rotaryEncoder.readEncoder();
+  long current = ReadEncoderValue(rotaryEncoder);
   int rawDelta = static_cast<int>(current - lastEncoderValue);
   if (rawDelta == 0) {
     return 0;
