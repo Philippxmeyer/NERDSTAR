@@ -79,6 +79,12 @@ void applyDefaults() {
   systemConfig.panningProfile.decelerationDegPerSec2 = 1.0f;
 }
 
+bool profileIsInvalid(const storage::GotoProfile& profile) {
+  return !isfinite(profile.maxSpeedDegPerSec) || profile.maxSpeedDegPerSec <= 0.0f ||
+         !isfinite(profile.accelerationDegPerSec2) || profile.accelerationDegPerSec2 <= 0.0f ||
+         !isfinite(profile.decelerationDegPerSec2) || profile.decelerationDegPerSec2 <= 0.0f;
+}
+
 void saveConfigInternal() {
   EEPROM.put(0, systemConfig);
   EEPROM.commit();
@@ -128,16 +134,12 @@ bool init() {
     applyDefaults();
     saveConfigInternal();
   } else {
-    if (systemConfig.gotoProfile.maxSpeedDegPerSec <= 0.0f ||
-        systemConfig.gotoProfile.accelerationDegPerSec2 <= 0.0f ||
-        systemConfig.gotoProfile.decelerationDegPerSec2 <= 0.0f) {
+    if (profileIsInvalid(systemConfig.gotoProfile)) {
       systemConfig.gotoProfile.maxSpeedDegPerSec = 3.0f;
       systemConfig.gotoProfile.accelerationDegPerSec2 = 1.0f;
       systemConfig.gotoProfile.decelerationDegPerSec2 = 1.0f;
     }
-    if (systemConfig.panningProfile.maxSpeedDegPerSec <= 0.0f ||
-        systemConfig.panningProfile.accelerationDegPerSec2 <= 0.0f ||
-        systemConfig.panningProfile.decelerationDegPerSec2 <= 0.0f) {
+    if (profileIsInvalid(systemConfig.panningProfile)) {
       systemConfig.panningProfile.maxSpeedDegPerSec = 3.0f;
       systemConfig.panningProfile.accelerationDegPerSec2 = 1.0f;
       systemConfig.panningProfile.decelerationDegPerSec2 = 1.0f;
