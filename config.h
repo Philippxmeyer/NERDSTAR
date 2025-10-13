@@ -60,7 +60,7 @@ constexpr double FULLSTEPS_PER_REV = 32.0 * 64.0; // 2048
 constexpr double MICROSTEPS = 16.0;
 constexpr float MAX_RPM_MANUAL = 3.0f;
 constexpr float GEAR_RATIO = 4.0f; // 1:4 reduction motor:telescope
-constexpr float JOYSTICK_DEADZONE = 0.05f;
+constexpr float JOYSTICK_DEADZONE = 0.03f;
 
 // Display configuration
 constexpr uint8_t OLED_WIDTH = 128;

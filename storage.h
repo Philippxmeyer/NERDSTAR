@@ -17,6 +17,7 @@ struct SystemConfig {
   bool axisCalibrated;
   bool polarAligned;
   uint32_t lastRtcEpoch;
+  GotoProfile panningProfile;
 };
 
 namespace storage {
@@ -36,6 +37,7 @@ void setJoystickCalibration(const JoystickCalibration& calibration);
 void setAxisCalibration(const AxisCalibration& calibration);
 void setBacklash(const BacklashConfig& backlash);
 void setGotoProfile(const GotoProfile& profile);
+void setPanningProfile(const GotoProfile& profile);
 void setPolarAligned(bool aligned);
 void setRtcEpoch(uint32_t epoch);
 void setObserverLocation(double latitudeDeg, double longitudeDeg, int32_t timezoneMinutes);
