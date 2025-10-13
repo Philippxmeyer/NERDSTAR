@@ -266,7 +266,7 @@ void setManualStepsPerSecond(Axis axis, double stepsPerSecond) {
   }
 
   ManualAxisControl& control = getManualControl(axis);
-  const auto& profile = storage::getConfig().gotoProfile;
+  const auto& profile = storage::getConfig().panningProfile;
   double stepsPerDegree = getAxisStepsPerDegree(axis);
 
   double maxSpeed = profile.maxSpeedDegPerSec * stepsPerDegree;

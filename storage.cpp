@@ -34,7 +34,8 @@ SystemConfig systemConfig{
     false,
     false,
     false,
-    0};
+    0,
+    {3.0f, 1.0f, 1.0f}};
 
 static_assert(sizeof(storage::CatalogEntry) == 9, "CatalogEntry packing mismatch");
 static_assert(sizeof(CatalogHeader) == 14, "CatalogHeader packing mismatch");
@@ -73,6 +74,15 @@ void applyDefaults() {
   systemConfig.axisCalibrated = false;
   systemConfig.polarAligned = false;
   systemConfig.lastRtcEpoch = 0;
+  systemConfig.panningProfile.maxSpeedDegPerSec = 3.0f;
+  systemConfig.panningProfile.accelerationDegPerSec2 = 1.0f;
+  systemConfig.panningProfile.decelerationDegPerSec2 = 1.0f;
+}
+
+bool profileIsInvalid(const storage::GotoProfile& profile) {
+  return !isfinite(profile.maxSpeedDegPerSec) || profile.maxSpeedDegPerSec <= 0.0f ||
+         !isfinite(profile.accelerationDegPerSec2) || profile.accelerationDegPerSec2 <= 0.0f ||
+         !isfinite(profile.decelerationDegPerSec2) || profile.decelerationDegPerSec2 <= 0.0f;
 }
 
 void saveConfigInternal() {
@@ -124,12 +134,15 @@ bool init() {
     applyDefaults();
     saveConfigInternal();
   } else {
-    if (systemConfig.gotoProfile.maxSpeedDegPerSec <= 0.0f ||
-        systemConfig.gotoProfile.accelerationDegPerSec2 <= 0.0f ||
-        systemConfig.gotoProfile.decelerationDegPerSec2 <= 0.0f) {
+    if (profileIsInvalid(systemConfig.gotoProfile)) {
       systemConfig.gotoProfile.maxSpeedDegPerSec = 3.0f;
       systemConfig.gotoProfile.accelerationDegPerSec2 = 1.0f;
       systemConfig.gotoProfile.decelerationDegPerSec2 = 1.0f;
+    }
+    if (profileIsInvalid(systemConfig.panningProfile)) {
+      systemConfig.panningProfile.maxSpeedDegPerSec = 3.0f;
+      systemConfig.panningProfile.accelerationDegPerSec2 = 1.0f;
+      systemConfig.panningProfile.decelerationDegPerSec2 = 1.0f;
     }
     if (systemConfig.backlash.azSteps < 0) systemConfig.backlash.azSteps = 0;
     if (systemConfig.backlash.altSteps < 0) systemConfig.backlash.altSteps = 0;
@@ -171,6 +184,11 @@ void setBacklash(const BacklashConfig& backlash) {
 
 void setGotoProfile(const GotoProfile& profile) {
   systemConfig.gotoProfile = profile;
+  saveConfigInternal();
+}
+
+void setPanningProfile(const GotoProfile& profile) {
+  systemConfig.panningProfile = profile;
   saveConfigInternal();
 }
 

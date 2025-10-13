@@ -44,6 +44,7 @@ enum class UiState {
   CatalogItemDetail,
   AxisCalibration,
   GotoSpeed,
+  PanningSpeed,
   GotoCoordinates,
   BacklashCalibration,
 };
@@ -127,11 +128,14 @@ GotoRuntimeState gotoRuntime{false,
 
 TrackingState tracking{false, 0.0, 0.0, -1, 0.0, 0.0, false};
 
-struct GotoSpeedState {
+enum class SpeedEditMode { Goto, Panning };
+
+struct SpeedProfileState {
   float maxSpeed;
   float acceleration;
   float deceleration;
   int fieldIndex;
+  SpeedEditMode mode;
 };
 
 struct BacklashCalibrationState {
@@ -142,7 +146,7 @@ struct BacklashCalibrationState {
   int64_t altEnd;
 };
 
-GotoSpeedState gotoSpeedState{0.0f, 0.0f, 0.0f, 0};
+SpeedProfileState speedProfileState{0.0f, 0.0f, 0.0f, 0, SpeedEditMode::Goto};
 BacklashCalibrationState backlashState{0, 0, 0, 0, 0};
 
 struct LocationEditState {
@@ -171,7 +175,7 @@ double manualGotoRaHours = 0.0;
 double manualGotoDecDegrees = 0.0;
 constexpr int kLocationFieldCount = 4;
 
-constexpr int kGotoSpeedFieldCount = 4;
+constexpr int kSpeedProfileFieldCount = 4;
 
 String selectedObjectName;
 String gotoTargetName;
@@ -191,8 +195,8 @@ constexpr size_t kMainMenuCount = sizeof(kMainMenuItems) / sizeof(kMainMenuItems
 int setupMenuIndex = 0;
 int setupMenuScroll = 0;
 constexpr const char* kSetupMenuItems[] = {
-    "Set RTC",       "Set Location", "Cal Joystick", "Cal Axes",
-    "Goto Speed",    "Cal Backlash", "WiFi OTA",     "Back"};
+    "Set RTC",       "Set Location", "Cal Joystick", "Cal Axes", "Goto Speed",
+    "Pan Speed",     "Cal Backlash", "WiFi OTA",     "Back"};
 constexpr size_t kSetupMenuCount = sizeof(kSetupMenuItems) / sizeof(kSetupMenuItems[0]);
 
 constexpr int kSetupMenuRtcIndex = 0;
@@ -200,9 +204,10 @@ constexpr int kSetupMenuLocationIndex = 1;
 constexpr int kSetupMenuJoystickIndex = 2;
 constexpr int kSetupMenuAxisCalIndex = 3;
 constexpr int kSetupMenuGotoSpeedIndex = 4;
-constexpr int kSetupMenuBacklashIndex = 5;
-constexpr int kSetupMenuWifiIndex = 6;
-constexpr int kSetupMenuBackIndex = 7;
+constexpr int kSetupMenuPanSpeedIndex = 5;
+constexpr int kSetupMenuBacklashIndex = 6;
+constexpr int kSetupMenuWifiIndex = 7;
+constexpr int kSetupMenuBackIndex = 8;
 
 int catalogTypeIndex = 0;
 int catalogTypeObjectIndex = 0;
@@ -490,6 +495,31 @@ bool raDecToAltAz(const DateTime& when,
   azimuthDeg = wrapAngle360(radToDeg(azRad));
   altitudeDeg = applyAtmosphericRefraction(geometricAltitudeDeg);
   return altitudeDeg > -5.0;  // allow slight tolerance below horizon
+}
+
+bool altAzToRaDec(const DateTime& when,
+                  double azimuthDeg,
+                  double altitudeDeg,
+                  double& raHours,
+                  double& decDegrees) {
+  double lstDeg = localSiderealDegrees(when);
+  double latRad = degToRad(storage::getConfig().observerLatitudeDeg);
+  double altRad = degToRad(altitudeDeg);
+  double azRad = degToRad(azimuthDeg);
+
+  double sinDec = sin(altRad) * sin(latRad) + cos(altRad) * cos(latRad) * cos(azRad);
+  sinDec = std::clamp(sinDec, -1.0, 1.0);
+  double decRad = asin(sinDec);
+
+  double sinHa = -sin(azRad) * cos(altRad);
+  double cosHa = cos(altRad) * sin(latRad) - sin(altRad) * cos(latRad) * cos(azRad);
+  double haRad = atan2(sinHa, cosHa);
+  double haDeg = wrapAngle180(radToDeg(haRad));
+
+  double raDeg = wrapAngle360(lstDeg - haDeg);
+  raHours = raDeg / 15.0;
+  decDegrees = radToDeg(decRad);
+  return true;
 }
 
 GotoProfileSteps toProfileSteps(const GotoProfile& profile, const AxisCalibration& cal) {
@@ -982,14 +1012,16 @@ void drawAxisCalibration() {
   display.print(steps[index]);
 }
 
-void drawGotoSpeedSetup() {
+void drawSpeedProfileSetup() {
   display.setCursor(0, 12);
-  display.print("Goto Speed");
+  display.print(speedProfileState.mode == SpeedEditMode::Goto ? "Goto Speed"
+                                                             : "Pan Speed");
   const char* labels[] = {"Max [deg/s]", "Accel [deg/s2]", "Decel [deg/s2]"};
-  float values[] = {gotoSpeedState.maxSpeed, gotoSpeedState.acceleration, gotoSpeedState.deceleration};
+  float values[] = {speedProfileState.maxSpeed, speedProfileState.acceleration,
+                    speedProfileState.deceleration};
   int y = 24;
   for (int i = 0; i < 3; ++i) {
-    bool selected = gotoSpeedState.fieldIndex == i;
+    bool selected = speedProfileState.fieldIndex == i;
     if (selected) {
       display.fillRect(0, y, config::OLED_WIDTH, 8, SSD1306_WHITE);
       display.setTextColor(SSD1306_BLACK);
@@ -1003,7 +1035,7 @@ void drawGotoSpeedSetup() {
     }
     y += 8;
   }
-  bool backSelected = gotoSpeedState.fieldIndex == kGotoSpeedFieldCount - 1;
+  bool backSelected = speedProfileState.fieldIndex == kSpeedProfileFieldCount - 1;
   if (backSelected) {
     display.fillRect(0, y, config::OLED_WIDTH, 8, SSD1306_WHITE);
     display.setTextColor(SSD1306_BLACK);
@@ -1090,41 +1122,64 @@ void enterLocationSetup() {
 
 void enterGotoSpeedSetup() {
   const GotoProfile& profile = storage::getConfig().gotoProfile;
-  gotoSpeedState.maxSpeed = profile.maxSpeedDegPerSec;
-  gotoSpeedState.acceleration = profile.accelerationDegPerSec2;
-  gotoSpeedState.deceleration = profile.decelerationDegPerSec2;
-  gotoSpeedState.fieldIndex = 0;
+  speedProfileState.maxSpeed = profile.maxSpeedDegPerSec;
+  speedProfileState.acceleration = profile.accelerationDegPerSec2;
+  speedProfileState.deceleration = profile.decelerationDegPerSec2;
+  speedProfileState.fieldIndex = 0;
+  speedProfileState.mode = SpeedEditMode::Goto;
   setUiState(UiState::GotoSpeed);
 }
 
-void handleGotoSpeedInput(int delta) {
-  if (delta != 0 && gotoSpeedState.fieldIndex < kGotoSpeedFieldCount - 1) {
+void enterPanningSpeedSetup() {
+  const GotoProfile& profile = storage::getConfig().panningProfile;
+  speedProfileState.maxSpeed = profile.maxSpeedDegPerSec;
+  speedProfileState.acceleration = profile.accelerationDegPerSec2;
+  speedProfileState.deceleration = profile.decelerationDegPerSec2;
+  speedProfileState.fieldIndex = 0;
+  speedProfileState.mode = SpeedEditMode::Panning;
+  setUiState(UiState::PanningSpeed);
+}
+
+void handleSpeedProfileInput(int delta) {
+  if (delta != 0 && speedProfileState.fieldIndex < kSpeedProfileFieldCount - 1) {
     constexpr float step = 0.1f;
-    switch (gotoSpeedState.fieldIndex) {
+    switch (speedProfileState.fieldIndex) {
       case 0:
-        gotoSpeedState.maxSpeed = std::clamp(gotoSpeedState.maxSpeed + delta * step, 0.5f, 20.0f);
+        speedProfileState.maxSpeed =
+            std::clamp(speedProfileState.maxSpeed + delta * step, 0.5f, 20.0f);
         break;
       case 1:
-        gotoSpeedState.acceleration = std::clamp(gotoSpeedState.acceleration + delta * step, 0.1f, 20.0f);
+        speedProfileState.acceleration =
+            std::clamp(speedProfileState.acceleration + delta * step, 0.1f, 20.0f);
         break;
       case 2:
-        gotoSpeedState.deceleration = std::clamp(gotoSpeedState.deceleration + delta * step, 0.1f, 20.0f);
+        speedProfileState.deceleration =
+            std::clamp(speedProfileState.deceleration + delta * step, 0.1f, 20.0f);
         break;
     }
   }
   if (input::consumeJoystickPress()) {
-    gotoSpeedState.fieldIndex = (gotoSpeedState.fieldIndex + 1) % kGotoSpeedFieldCount;
+    speedProfileState.fieldIndex = (speedProfileState.fieldIndex + 1) % kSpeedProfileFieldCount;
   }
   if (input::consumeEncoderClick()) {
-    if (gotoSpeedState.fieldIndex == kGotoSpeedFieldCount - 1) {
+    bool isBack = speedProfileState.fieldIndex == kSpeedProfileFieldCount - 1;
+    if (isBack) {
       setUiState(UiState::SetupMenu);
-      showInfo("Goto unchanged");
-    } else {
-      GotoProfile profile{gotoSpeedState.maxSpeed, gotoSpeedState.acceleration, gotoSpeedState.deceleration};
+      showInfo(speedProfileState.mode == SpeedEditMode::Goto ? "Goto unchanged"
+                                                            : "Pan unchanged");
+      return;
+    }
+    GotoProfile profile{speedProfileState.maxSpeed,
+                        speedProfileState.acceleration,
+                        speedProfileState.deceleration};
+    if (speedProfileState.mode == SpeedEditMode::Goto) {
       storage::setGotoProfile(profile);
       showInfo("Goto saved");
-      setUiState(UiState::SetupMenu);
+    } else {
+      storage::setPanningProfile(profile);
+      showInfo("Pan saved");
     }
+    setUiState(UiState::SetupMenu);
   }
 }
 
@@ -1437,7 +1492,8 @@ void render() {
       drawAxisCalibration();
       break;
     case UiState::GotoSpeed:
-      drawGotoSpeedSetup();
+    case UiState::PanningSpeed:
+      drawSpeedProfileSetup();
       break;
     case UiState::GotoCoordinates:
       drawGotoCoordinateEntry();
@@ -1742,6 +1798,24 @@ void finalizeTrackingTarget(int catalogIndex,
   motion::setTrackingEnabled(true);
 }
 
+bool startTrackingCurrentOrientation() {
+  DateTime now = currentDateTime();
+  double currentAz = motion::stepsToAzDegrees(motion::getStepCount(Axis::Az));
+  double currentAlt = motion::stepsToAltDegrees(motion::getStepCount(Axis::Alt));
+  double raHours = 0.0;
+  double decDegrees = 0.0;
+  if (!altAzToRaDec(now, currentAz, currentAlt, raHours, decDegrees)) {
+    return false;
+  }
+  double targetAz = 0.0;
+  double targetAlt = 0.0;
+  if (!raDecToAltAz(now, raHours, decDegrees, targetAz, targetAlt)) {
+    return false;
+  }
+  finalizeTrackingTarget(-1, raHours, decDegrees, targetAz, targetAlt);
+  return true;
+}
+
 void completeGotoSuccess() {
   motion::clearGotoRates();
   systemState.gotoActive = false;
@@ -1804,13 +1878,7 @@ void updateTracking() {
 
   if (systemState.joystickActive) {
     tracking.userAdjusting = true;
-    motion::setTrackingRates(0.0, 0.0);
-    motion::setTrackingEnabled(false);
-    systemState.trackingActive = false;
-    return;
-  }
-
-  if (tracking.userAdjusting) {
+  } else if (tracking.userAdjusting) {
     tracking.userAdjusting = false;
     tracking.offsetAzDeg = wrapAngle180(currentAz - azDeg);
     tracking.offsetAltDeg = currentAlt - altDeg;
@@ -1931,14 +1999,18 @@ void handleMainMenuInput(int delta) {
       if (!systemState.polarAligned) {
         showInfo("Align first");
       } else {
-        if (!tracking.active && selectedObjectName.isEmpty() && tracking.targetCatalogIndex < 0) {
-          showInfo("Goto first");
-          break;
+        if (!tracking.active) {
+          if (startTrackingCurrentOrientation()) {
+            showInfo("Tracking on");
+          } else {
+            showInfo("Track failed");
+          }
+        } else {
+          tracking.userAdjusting = false;
+          motion::setTrackingEnabled(true);
+          systemState.trackingActive = true;
+          showInfo("Tracking on");
         }
-        tracking.active = true;
-        tracking.userAdjusting = false;
-        systemState.trackingActive = true;
-        showInfo("Tracking on");
       }
       break;
     case 3:
@@ -2049,6 +2121,9 @@ void handleSetupMenuInput(int delta) {
       break;
     case kSetupMenuGotoSpeedIndex:
       enterGotoSpeedSetup();
+      break;
+    case kSetupMenuPanSpeedIndex:
+      enterPanningSpeedSetup();
       break;
     case kSetupMenuBacklashIndex:
       startBacklashCalibration();
@@ -2414,7 +2489,8 @@ void handleInput() {
       break;
     }
     case UiState::GotoSpeed:
-      handleGotoSpeedInput(delta);
+    case UiState::PanningSpeed:
+      handleSpeedProfileInput(delta);
       break;
     case UiState::GotoCoordinates:
       handleGotoCoordinateInput(delta);
@@ -2448,7 +2524,8 @@ void completePolarAlignment() {
   }
   storage::setPolarAligned(true);
   setUiState(UiState::StatusScreen);
-  showInfo("Polaris locked");
+  bool trackingStarted = startTrackingCurrentOrientation();
+  showInfo(trackingStarted ? "Tracking Polaris" : "Polaris locked");
 }
 
 void startPolarAlignment() {
