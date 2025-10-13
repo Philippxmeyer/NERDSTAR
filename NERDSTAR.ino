@@ -57,7 +57,8 @@ void setup() {
   display_menu::showReady();
   display_menu::startTask();
 
-  g_mountLinkReady = comm::waitForReady(5000);
+  comm::waitForReady(5000);
+  g_mountLinkReady = comm::isLinkActive();
   if (Serial) {
     Serial.println(g_mountLinkReady ? "[HID] Mount link ready"
                                     : "[HID] Mount link offline");
@@ -65,6 +66,7 @@ void setup() {
   if (!g_mountLinkReady) {
     display_menu::showInfo("Mount link offline", 2000);
   }
+  systemState.mountLinkReady = g_mountLinkReady;
 
   if (!catalog::init()) {
     display_menu::showInfo("Catalog missing", 2000);
@@ -72,6 +74,7 @@ void setup() {
 }
 
 void loop() {
+  comm::updateLink();
   display_menu::update();
   display_menu::handleInput();
 
@@ -99,14 +102,25 @@ void loop() {
     display_menu::showInfo("Motion stopped", 2000);
   }
 
-  if (!g_mountLinkReady) {
+  bool linkActive = comm::isLinkActive();
+  if (!linkActive) {
     if (comm::waitForReady(1)) {
-      g_mountLinkReady = true;
-      systemState.manualCommandOk = true;
-      display_menu::showInfo("Mount link ready", 2000);
-      if (Serial) {
-        Serial.println("[HID] Mount link re-established");
-      }
+      linkActive = comm::isLinkActive();
+    }
+  }
+  if (linkActive && !g_mountLinkReady) {
+    g_mountLinkReady = true;
+    systemState.manualCommandOk = true;
+    display_menu::showInfo("Mount link ready", 2000);
+    if (Serial) {
+      Serial.println("[HID] Mount link re-established");
+    }
+  } else if (!linkActive && g_mountLinkReady) {
+    g_mountLinkReady = false;
+    systemState.manualCommandOk = false;
+    display_menu::showInfo("Mount link offline", 2000);
+    if (Serial) {
+      Serial.println("[HID] Mount link lost");
     }
   }
   systemState.mountLinkReady = g_mountLinkReady;
@@ -285,6 +299,7 @@ void commandTask(void*) {
   comm::announceReady();
   lastReadyMs = millis();
   while (true) {
+    comm::updateLink();
     comm::Request request;
     if (comm::readRequest(request, 100)) {
       handleRequest(request);
