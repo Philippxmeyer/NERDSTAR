@@ -11,7 +11,7 @@
 
 namespace {
 
-constexpr int kEncoderStepsPerNotch = 4;
+constexpr int kEncoderStepsPerNotch = 2;
 constexpr long kEncoderMinValue = -100000;
 constexpr long kEncoderMaxValue = 100000;
 constexpr uint32_t kAccelerationResetMs = 400;

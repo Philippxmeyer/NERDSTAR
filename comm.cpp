@@ -3,80 +3,129 @@
 #include <Arduino.h>
 #include <HardwareSerial.h>
 #include <algorithm>
+#include <deque>
+#include <utility>
 
 #if defined(DEVICE_ROLE_HID)
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #endif
 
+#include "Comms.h"
+
 namespace {
 
 HardwareSerial uartLink(static_cast<int>(config::COMM_UART_NUM));
+Comms commsLink;
 uint16_t nextRequestId = 1;
 #if defined(DEVICE_ROLE_HID)
 SemaphoreHandle_t rpcMutex = nullptr;
-#endif
-
-constexpr size_t kMaxLineLength = 160;
-#if defined(DEVICE_ROLE_HID)
 constexpr uint8_t kMaxCallRetries = 3;
 #endif
 
-// Buffer that accumulates incoming characters until a full line has been
-// received. This allows callers to use short timeouts without losing partial
-// data when no newline has arrived yet.
-String rxBuffer;
+constexpr uint8_t kAsciiChannel = 1;
+constexpr size_t kMaxQueuedLines = 16;
+
+std::deque<String> lineQueue;
+
+void pumpLink() { commsLink.update(); }
 
 void dropPendingInput() {
-  rxBuffer.clear();
-  while (uartLink.available()) {
-    uartLink.read();
-  }
+  lineQueue.clear();
+  commsLink.clearError();
 }
 
 bool readLine(String& line, uint32_t timeoutMs) {
   uint32_t start = millis();
-  bool discardingOverflow = false;
   while (true) {
-    while (uartLink.available()) {
-      char c = static_cast<char>(uartLink.read());
-      if (timeoutMs != 0) {
-        start = millis();
-      }
-      if (discardingOverflow) {
-        if (c == '\n') {
-          discardingOverflow = false;
-          rxBuffer.clear();
-        }
-        continue;
-      }
-      if (c == '\n') {
-        line = rxBuffer;
-        rxBuffer.clear();
-        return true;
-      }
-      if (c != '\r') {
-        rxBuffer += c;
-        if (rxBuffer.length() > kMaxLineLength) {
-          if (Serial) {
-            Serial.println("[COMM] RX overflow, resetting buffer");
-          }
-          rxBuffer.clear();
-          discardingOverflow = true;
-        }
-      }
+    pumpLink();
+    if (!lineQueue.empty()) {
+      line = lineQueue.front();
+      lineQueue.pop_front();
+      return true;
     }
-    if (timeoutMs != 0 && (millis() - start) >= timeoutMs) {
-      return false;
+    if (timeoutMs != 0) {
+      uint32_t now = millis();
+      if ((now - start) >= timeoutMs) {
+        return false;
+      }
     }
     delay(1);
   }
 }
 
-void sendLine(const String& line) {
-  uartLink.print(line);
-  uartLink.print('\n');
-  uartLink.flush();
+bool sendLine(const String& line) {
+  const size_t length = static_cast<size_t>(line.length());
+  if (length > Comms::kMaxPayloadSize) {
+    if (Serial) {
+      Serial.println("[COMM] TX line too long for packet buffer");
+    }
+    return false;
+  }
+  if (!commsLink.send(kAsciiChannel,
+                      reinterpret_cast<const uint8_t*>(line.c_str()), length)) {
+    if (Serial) {
+      Serial.println("[COMM] Failed to queue packet for transmission");
+    }
+    return false;
+  }
+  return true;
+}
+
+void handlePacket(const Comms::Packet& packet, void*) {
+  if (packet.channel != kAsciiChannel) {
+    return;
+  }
+  String line;
+  line.reserve(packet.size);
+  for (uint8_t i = 0; i < packet.size; ++i) {
+    line += static_cast<char>(packet.data[i]);
+  }
+  if (line.equals("READY")) {
+    for (const auto& existing : lineQueue) {
+      if (existing.equals("READY")) {
+        return;  // Already queued a READY notification.
+      }
+    }
+  }
+  if (lineQueue.size() >= kMaxQueuedLines) {
+    auto readyIt = std::find_if(lineQueue.begin(), lineQueue.end(), [](const String& value) {
+      return value.equals("READY");
+    });
+    if (readyIt != lineQueue.end()) {
+      lineQueue.erase(readyIt);
+    } else {
+      lineQueue.pop_front();
+    }
+  }
+  lineQueue.push_back(std::move(line));
+}
+
+void handleHeartbeat(void*) {
+  // Nothing to do; link state is tracked inside Comms.
+}
+
+void handleError(Comms::Error error, int8_t rawStatus, void*) {
+  if (!Serial) {
+    return;
+  }
+  switch (error) {
+    case Comms::Error::kPayloadTooLarge:
+      Serial.println("[COMM] Payload too large for TX buffer");
+      break;
+    case Comms::Error::kInvalidPayload:
+      Serial.println("[COMM] Invalid payload pointer");
+      break;
+    case Comms::Error::kHeartbeatLost:
+      Serial.println("[COMM] Heartbeat lost");
+      break;
+    case Comms::Error::kSerialTransfer:
+      Serial.printf("[COMM] SerialTransfer error: %d\n", rawStatus);
+      break;
+    case Comms::Error::kNone:
+    default:
+      break;
+  }
 }
 
 void splitFields(const String& line, std::vector<String>& fields) {
@@ -98,18 +147,27 @@ void splitFields(const String& line, std::vector<String>& fields) {
 namespace comm {
 
 void initLink() {
-  uartLink.begin(config::COMM_BAUD, SERIAL_8N1, config::COMM_RX_PIN,
-                 config::COMM_TX_PIN);
-  uartLink.setRxBufferSize(256);
-  uartLink.setTimeout(5);
-  uartLink.flush();
-  rxBuffer.clear();
+  lineQueue.clear();
+  nextRequestId = 1;
+  commsLink.begin(uartLink, config::COMM_RX_PIN, config::COMM_TX_PIN,
+                  config::COMM_BAUD);
+  commsLink.setHeartbeatInterval(50);
+  commsLink.setHeartbeatTimeout(500);
+
+  Comms::Callbacks callbacks{};
+  callbacks.onPacket = handlePacket;
+  callbacks.onHeartbeat = handleHeartbeat;
+  callbacks.onError = handleError;
+  commsLink.setCallbacks(callbacks);
+  commsLink.clearError();
 #if defined(DEVICE_ROLE_HID)
   if (rpcMutex == nullptr) {
     rpcMutex = xSemaphoreCreateMutex();
   }
 #endif
 }
+
+void updateLink() { pumpLink(); }
 
 #if defined(DEVICE_ROLE_HID)
 
@@ -175,7 +233,10 @@ bool call(const char* command, std::initializer_list<String> params,
       Serial.printf("[COMM] Retrying %s (attempt %u, last error: %s)\n", command,
                     attempt + 1, lastError.c_str());
     }
-    sendLine(line);
+    if (!sendLine(line)) {
+      lastError = "Send";
+      break;
+    }
 
     uint32_t start = millis();
     while (true) {
@@ -241,6 +302,11 @@ bool call(const char* command, std::initializer_list<String> params,
     *error = lastError;
   }
   return false;
+}
+
+bool isLinkActive() {
+  pumpLink();
+  return commsLink.isActive();
 }
 
 #elif defined(DEVICE_ROLE_MAIN)
