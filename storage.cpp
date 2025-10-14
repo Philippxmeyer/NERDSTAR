@@ -12,15 +12,15 @@ namespace {
 constexpr uint32_t kConfigMagic = 0x4E455244;  // "NERD"
 constexpr size_t kConfigStorageSize = 256;
 constexpr uint32_t kCatalogMagic = 0x4E434154;  // "NCAT"
-constexpr uint16_t kCatalogVersion = 1;
+constexpr uint16_t kCatalogVersion = 2;
 
 struct __attribute__((packed)) CatalogHeader {
   uint32_t magic;
   uint16_t version;
   uint16_t count;
   uint16_t entriesOffset;
-  uint16_t namesOffset;
-  uint16_t namesLength;
+  uint16_t stringsOffset;
+  uint16_t stringsLength;
 };
 
 SystemConfig systemConfig{
@@ -43,7 +43,7 @@ SystemConfig systemConfig{
 
 static_assert(sizeof(SystemConfig) <= kConfigStorageSize, "SystemConfig too large for config storage");
 
-static_assert(sizeof(storage::CatalogEntry) == 9, "CatalogEntry packing mismatch");
+static_assert(sizeof(storage::CatalogEntry) == 12, "CatalogEntry packing mismatch");
 static_assert(sizeof(CatalogHeader) == 14, "CatalogHeader packing mismatch");
 
 // `catalog_data.inc` is a generated binary blob that contains the default catalog data.
@@ -53,14 +53,14 @@ static_assert(sizeof(CatalogHeader) == 14, "CatalogHeader packing mismatch");
 
 constexpr size_t kCatalogHeaderOffset = kConfigStorageSize;
 constexpr size_t kCatalogEntriesOffset = kCatalogHeaderOffset + sizeof(CatalogHeader);
-constexpr size_t kCatalogNamesOffset =
+constexpr size_t kCatalogStringsOffset =
     kCatalogEntriesOffset + kCatalogEntryCount * sizeof(storage::CatalogEntry);
 constexpr size_t kCatalogStorageSize = sizeof(CatalogHeader) +
                                        kCatalogEntryCount * sizeof(storage::CatalogEntry) +
-                                       kCatalogNameTableSize;
+                                       kCatalogStringTableSize;
 constexpr size_t kEepromSize = kConfigStorageSize + kCatalogStorageSize;
 
-static_assert(kCatalogNamesOffset + kCatalogNameTableSize <= kEepromSize,
+static_assert(kCatalogStringsOffset + kCatalogStringTableSize <= kEepromSize,
               "EEPROM size insufficient for catalog data");
 
 void applyDefaults() {
@@ -107,7 +107,7 @@ bool catalogDataIsValid() {
   EEPROM.get(kCatalogHeaderOffset, header);
   return header.magic == kCatalogMagic && header.version == kCatalogVersion &&
          header.count == kCatalogEntryCount && header.entriesOffset == kCatalogEntriesOffset &&
-         header.namesOffset == kCatalogNamesOffset && header.namesLength == kCatalogNameTableSize;
+         header.stringsOffset == kCatalogStringsOffset && header.stringsLength == kCatalogStringTableSize;
 }
 
 void writeCatalogToEeprom() {
@@ -115,15 +115,15 @@ void writeCatalogToEeprom() {
                        kCatalogVersion,
                        static_cast<uint16_t>(kCatalogEntryCount),
                        static_cast<uint16_t>(kCatalogEntriesOffset),
-                       static_cast<uint16_t>(kCatalogNamesOffset),
-                       static_cast<uint16_t>(kCatalogNameTableSize)};
+                       static_cast<uint16_t>(kCatalogStringsOffset),
+                       static_cast<uint16_t>(kCatalogStringTableSize)};
   EEPROM.put(kCatalogHeaderOffset, header);
   for (size_t i = 0; i < kCatalogEntryCount; ++i) {
     const auto& entry = kCatalogEntries[i];
     EEPROM.put(kCatalogEntriesOffset + i * sizeof(storage::CatalogEntry), entry);
   }
-  for (size_t i = 0; i < kCatalogNameTableSize; ++i) {
-    EEPROM.write(kCatalogNamesOffset + i, static_cast<uint8_t>(kCatalogNames[i]));
+  for (size_t i = 0; i < kCatalogStringTableSize; ++i) {
+    EEPROM.write(kCatalogStringsOffset + i, static_cast<uint8_t>(kCatalogStrings[i]));
   }
   EEPROM.commit();
 }
@@ -275,18 +275,18 @@ bool readCatalogEntry(size_t index, CatalogEntry& entry) {
   return true;
 }
 
-bool readCatalogName(uint16_t offset, uint8_t length, char* buffer, size_t bufferSize) {
+bool readCatalogString(uint16_t offset, uint8_t length, char* buffer, size_t bufferSize) {
   if (!buffer || bufferSize == 0) {
     return false;
   }
-  if (static_cast<size_t>(offset) + length > kCatalogNameTableSize) {
+  if (static_cast<size_t>(offset) + length > kCatalogStringTableSize) {
     return false;
   }
   if (bufferSize <= length) {
     return false;
   }
   for (uint8_t i = 0; i < length; ++i) {
-    buffer[i] = static_cast<char>(EEPROM.read(kCatalogNamesOffset + offset + i));
+    buffer[i] = static_cast<char>(EEPROM.read(kCatalogStringsOffset + offset + i));
   }
   buffer[length] = '\0';
   return true;

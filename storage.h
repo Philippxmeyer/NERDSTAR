@@ -30,6 +30,8 @@ namespace storage {
 struct __attribute__((packed)) CatalogEntry {
   uint16_t nameOffset;
   uint8_t nameLength;
+  uint16_t codeOffset;
+  uint8_t codeLength;
   uint8_t typeIndex;
   uint16_t raHoursTimes1000;
   int16_t decDegreesTimes100;
@@ -54,7 +56,7 @@ const char* wifiPassword();
 void save();
 size_t getCatalogEntryCount();
 bool readCatalogEntry(size_t index, CatalogEntry& entry);
-bool readCatalogName(uint16_t offset, uint8_t length, char* buffer, size_t bufferSize);
+bool readCatalogString(uint16_t offset, uint8_t length, char* buffer, size_t bufferSize);
 
 }  // namespace storage
 

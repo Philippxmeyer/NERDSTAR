@@ -999,10 +999,15 @@ void drawCatalogItemDetail() {
   bool above = raDecToAltAz(now, ra, dec, azDeg, altDeg);
   String objectName = sanitizeForDisplay(object->name);
   String objectType = sanitizeForDisplay(object->type);
+  String objectCode = sanitizeForDisplay(object->code);
   display.setCursor(0, 20);
   display.print(objectName);
   display.setCursor(0, 28);
   display.print(objectType);
+  if (objectCode.length() > 0) {
+    display.print(" / ");
+    display.print(objectCode);
+  }
   display.setCursor(0, 36);
   display.print("RA: ");
   display.print(raBuffer);
