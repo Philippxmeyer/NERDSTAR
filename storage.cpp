@@ -46,6 +46,9 @@ static_assert(sizeof(SystemConfig) <= kConfigStorageSize, "SystemConfig too larg
 static_assert(sizeof(storage::CatalogEntry) == 9, "CatalogEntry packing mismatch");
 static_assert(sizeof(CatalogHeader) == 14, "CatalogHeader packing mismatch");
 
+// `catalog_data.inc` is a generated binary blob that contains the default catalog data.
+// It is produced from `data/catalog.xml` via `tools/build_catalog.py` and embedded into
+// the firmware image so we can seed the emulated EEPROM on first boot.
 #include "catalog_data.inc"
 
 constexpr size_t kCatalogHeaderOffset = kConfigStorageSize;

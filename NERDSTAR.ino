@@ -17,6 +17,10 @@
 
 namespace {
 bool g_mountLinkReady = false;
+uint32_t g_linkInactiveSinceMs = 0;
+uint32_t g_linkActiveSinceMs = 0;
+constexpr uint32_t kLinkReadyConfirmMs = 250;
+constexpr uint32_t kLinkOfflineConfirmMs = 750;
 
 void initDebugSerial() {
   Serial.begin(config::USB_DEBUG_BAUD);
@@ -108,19 +112,38 @@ void loop() {
       linkActive = comm::isLinkActive();
     }
   }
-  if (linkActive && !g_mountLinkReady) {
-    g_mountLinkReady = true;
-    systemState.manualCommandOk = true;
-    display_menu::showInfo("Mount link ready", 2000);
-    if (Serial) {
-      Serial.println("[HID] Mount link re-established");
+  uint32_t nowMs = millis();
+  if (linkActive) {
+    g_linkInactiveSinceMs = 0;
+    if (!g_mountLinkReady) {
+      if (g_linkActiveSinceMs == 0) {
+        g_linkActiveSinceMs = nowMs;
+      } else if ((nowMs - g_linkActiveSinceMs) >= kLinkReadyConfirmMs) {
+        g_mountLinkReady = true;
+        g_linkActiveSinceMs = 0;
+        systemState.manualCommandOk = true;
+        display_menu::showInfo("Mount link ready", 2000);
+        if (Serial) {
+          Serial.println("[HID] Mount link re-established");
+        }
+      }
+    } else {
+      g_linkActiveSinceMs = 0;
     }
-  } else if (!linkActive && g_mountLinkReady) {
-    g_mountLinkReady = false;
-    systemState.manualCommandOk = false;
-    display_menu::showInfo("Mount link offline", 2000);
-    if (Serial) {
-      Serial.println("[HID] Mount link lost");
+  } else {
+    g_linkActiveSinceMs = 0;
+    if (g_mountLinkReady) {
+      if (g_linkInactiveSinceMs == 0) {
+        g_linkInactiveSinceMs = nowMs;
+      } else if ((nowMs - g_linkInactiveSinceMs) >= kLinkOfflineConfirmMs) {
+        g_mountLinkReady = false;
+        g_linkInactiveSinceMs = 0;
+        systemState.manualCommandOk = false;
+        display_menu::showInfo("Mount link offline", 2000);
+        if (Serial) {
+          Serial.println("[HID] Mount link lost");
+        }
+      }
     }
   }
   systemState.mountLinkReady = g_mountLinkReady;
