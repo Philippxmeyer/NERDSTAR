@@ -27,11 +27,21 @@ const char* resolveTypeName(uint8_t index) {
   return kTypeNames[index];
 }
 
-bool entryValuesAreValid(const storage::CatalogEntry& candidate, const char* rawName, size_t nameBufferSize) {
+bool entryValuesAreValid(const storage::CatalogEntry& candidate,
+                         const char* rawName,
+                         size_t nameBufferSize,
+                         const char* rawCode,
+                         size_t codeBufferSize) {
   if (!rawName || rawName[0] == '\0') {
     return false;
   }
   if (candidate.nameLength == 0 || candidate.nameLength >= nameBufferSize) {
+    return false;
+  }
+  if (!rawCode) {
+    return false;
+  }
+  if (candidate.codeLength == 0 || candidate.codeLength >= codeBufferSize) {
     return false;
   }
   if (candidate.typeIndex >= kTypeCount) {
@@ -68,15 +78,20 @@ bool init() {
       continue;
     }
     char nameBuffer[32];
-    if (!storage::readCatalogName(entry.nameOffset, entry.nameLength, nameBuffer, sizeof(nameBuffer))) {
+    char codeBuffer[48];
+    if (!storage::readCatalogString(entry.nameOffset, entry.nameLength, nameBuffer, sizeof(nameBuffer))) {
       continue;
     }
-    if (!entryValuesAreValid(entry, nameBuffer, sizeof(nameBuffer))) {
+    if (!storage::readCatalogString(entry.codeOffset, entry.codeLength, codeBuffer, sizeof(codeBuffer))) {
+      continue;
+    }
+    if (!entryValuesAreValid(entry, nameBuffer, sizeof(nameBuffer), codeBuffer, sizeof(codeBuffer))) {
       continue;
     }
 
     CatalogObject object;
     object.name = sanitizeForDisplay(String(nameBuffer));
+    object.code = sanitizeForDisplay(String(codeBuffer));
     object.typeIndex = entry.typeIndex;
     if (entry.typeIndex < kTypeCount) {
       object.type = sanitizedTypeNames[entry.typeIndex];

@@ -4,6 +4,7 @@
 
 struct CatalogObject {
   String name;
+  String code;
   String type;
   uint8_t typeIndex;
   double raHours;
