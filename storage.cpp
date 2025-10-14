@@ -79,7 +79,7 @@ void applyDefaults() {
   systemConfig.panningProfile.decelerationDegPerSec2 = 1.0f;
 }
 
-bool profileIsInvalid(const storage::GotoProfile& profile) {
+bool profileIsInvalid(const GotoProfile& profile) {
   return !isfinite(profile.maxSpeedDegPerSec) || profile.maxSpeedDegPerSec <= 0.0f ||
          !isfinite(profile.accelerationDegPerSec2) || profile.accelerationDegPerSec2 <= 0.0f ||
          !isfinite(profile.decelerationDegPerSec2) || profile.decelerationDegPerSec2 <= 0.0f;

@@ -1,9 +1,67 @@
 #include "Comms.h"
 
 #include <cstring>
+#include <type_traits>
+#include <utility>
 
 namespace {
 constexpr uint32_t kDefaultRxBufferSize = 256;  //!< Generous RX buffer for bursty packets
+
+template <typename... Ts>
+using void_t = void;
+
+template <typename T, typename = void>
+struct HasDirectBuffers : std::false_type {};
+
+template <typename T>
+struct HasDirectBuffers<T, void_t<decltype(std::declval<T>().txBuff),
+                                    decltype(std::declval<T>().rxBuff)>>
+    : std::true_type {};
+
+template <typename T, typename = void>
+struct HasPacketBuffers : std::false_type {};
+
+template <typename T>
+struct HasPacketBuffers<
+    T, void_t<decltype(std::declval<T>().packet.txBuff),
+              decltype(std::declval<T>().packet.rxBuff)>> : std::true_type {};
+
+template <typename Transfer, typename Enable = void>
+struct SerialTransferBufferAccessor;
+
+template <typename Transfer>
+struct SerialTransferBufferAccessor<Transfer,
+                                    typename std::enable_if<
+                                        HasDirectBuffers<Transfer>::value>::type> {
+  static uint8_t* tx(Transfer& transfer) { return transfer.txBuff; }
+  static const uint8_t* rx(const Transfer& transfer) { return transfer.rxBuff; }
+};
+
+template <typename Transfer>
+struct SerialTransferBufferAccessor<
+    Transfer,
+    typename std::enable_if<!HasDirectBuffers<Transfer>::value &&
+                            HasPacketBuffers<Transfer>::value>::type> {
+  static uint8_t* tx(Transfer& transfer) { return transfer.packet.txBuff; }
+  static const uint8_t* rx(const Transfer& transfer) {
+    return transfer.packet.rxBuff;
+  }
+};
+
+template <typename Transfer>
+struct SerialTransferBufferAccessor<
+    Transfer,
+    typename std::enable_if<!HasDirectBuffers<Transfer>::value &&
+                            !HasPacketBuffers<Transfer>::value>::type> {
+  static uint8_t* tx(Transfer&) {
+    static_assert(sizeof(Transfer) == 0,
+                  "SerialTransfer buffer access unsupported");
+    return nullptr;
+  }
+  static const uint8_t* rx(const Transfer&) { return nullptr; }
+};
+
+using TransferBuffers = SerialTransferBufferAccessor<SerialTransfer>;
 }  // namespace
 
 Comms::Comms() = default;
@@ -110,11 +168,12 @@ bool Comms::sendFrame(FrameType type, uint8_t channel, const uint8_t* payload, s
     return false;
   }
 
-  transfer_.txBuff[0] = static_cast<uint8_t>(type);
-  transfer_.txBuff[1] = channel;
-  transfer_.txBuff[2] = static_cast<uint8_t>(length);
+  uint8_t* txBuffer = TransferBuffers::tx(transfer_);
+  txBuffer[0] = static_cast<uint8_t>(type);
+  txBuffer[1] = channel;
+  txBuffer[2] = static_cast<uint8_t>(length);
   if (length > 0) {
-    memcpy(&transfer_.txBuff[kFrameOverhead], payload, length);
+    memcpy(&txBuffer[kFrameOverhead], payload, length);
   }
 
   transfer_.sendData(static_cast<uint16_t>(length + kFrameOverhead));
@@ -139,9 +198,10 @@ void Comms::handleIncoming(uint16_t size) {
     return;
   }
 
-  const FrameType type = static_cast<FrameType>(transfer_.rxBuff[0]);
-  const uint8_t channel = transfer_.rxBuff[1];
-  const uint8_t payloadSize = transfer_.rxBuff[2];
+  const uint8_t* rxBuffer = TransferBuffers::rx(transfer_);
+  const FrameType type = static_cast<FrameType>(rxBuffer[0]);
+  const uint8_t channel = rxBuffer[1];
+  const uint8_t payloadSize = rxBuffer[2];
 
   if (payloadSize > kMaxPayloadSize || payloadSize != size - kFrameOverhead) {
     stats_.payloadErrors++;
@@ -180,7 +240,7 @@ void Comms::handleIncoming(uint16_t size) {
   packet.channel = channel;
   packet.size = payloadSize;
   if (packet.size > 0) {
-    memcpy(packet.data, &transfer_.rxBuff[kFrameOverhead], packet.size);
+    memcpy(packet.data, &rxBuffer[kFrameOverhead], packet.size);
   }
   stats_.packetsRx++;
 
