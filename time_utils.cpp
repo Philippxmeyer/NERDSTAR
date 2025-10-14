@@ -32,13 +32,13 @@ bool europeDstActive(time_t utcEpoch, int32_t timezoneMinutes) {
   return true;
 }
 
-int32_t dstOffsetFromUtc(time_t utcEpoch, storage::DstMode mode, int32_t timezoneMinutes) {
+int32_t dstOffsetFromUtc(time_t utcEpoch, DstMode mode, int32_t timezoneMinutes) {
   switch (mode) {
-    case storage::DstMode::Off:
+    case DstMode::Off:
       return 0;
-    case storage::DstMode::On:
+    case DstMode::On:
       return kDstOffsetMinutes;
-    case storage::DstMode::Auto:
+    case DstMode::Auto:
       return europeDstActive(utcEpoch, timezoneMinutes) ? kDstOffsetMinutes : 0;
   }
   return 0;
