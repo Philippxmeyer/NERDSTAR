@@ -179,6 +179,10 @@ int64_t altDegreesToSteps(double degrees) {
   return parseInt64(payload.front());
 }
 
+double getMinAltitudeDegrees() { return -5.0; }
+
+double getMaxAltitudeDegrees() { return 90.0; }
+
 void applyCalibration(const AxisCalibration& calibration) {
   callAndUpdate("APPLY_CALIBRATION",
                 {formatFloat(calibration.stepsPerDegreeAz),

@@ -19,6 +19,8 @@ constexpr double kStepsPerAxisRev =
     config::FULLSTEPS_PER_REV * config::MICROSTEPS * config::GEAR_RATIO;
 constexpr double kMinActiveStepsPerSecond = 0.1;
 constexpr uint32_t kStepPulseWidthUs = 3;
+constexpr double kMinAltitudeDegrees = -5.0;
+constexpr double kMaxAltitudeDegrees = 90.0;
 
 struct AxisState {
   uint8_t enPin;
@@ -152,17 +154,62 @@ void setAxisTrackingContribution(AxisState& axis, double value) {
   portEXIT_CRITICAL(&axis.mux);
 }
 
+double clampAltitudeDegrees(double degrees) {
+  return std::clamp(degrees, kMinAltitudeDegrees, kMaxAltitudeDegrees);
+}
+
+double stepsToAltitudeDegreesRaw(int64_t steps) {
+  if (calibration.stepsPerDegreeAlt <= 0.0) {
+    return 0.0;
+  }
+  double adjusted = static_cast<double>(steps - calibration.altHomeOffset);
+  return adjusted / calibration.stepsPerDegreeAlt;
+}
+
+int64_t clampAltitudeSteps(int64_t steps) {
+  if (calibration.stepsPerDegreeAlt <= 0.0) {
+    return steps;
+  }
+  double degrees = stepsToAltitudeDegreesRaw(steps);
+  double clampedDegrees = clampAltitudeDegrees(degrees);
+  double clampedSteps =
+      clampedDegrees * calibration.stepsPerDegreeAlt + calibration.altHomeOffset;
+  return static_cast<int64_t>(llround(clampedSteps));
+}
+
 void applyStep(AxisState& axis, int8_t direction, uint64_t nextDue) {
+  bool allowStep = true;
+  if (&axis == &axisAlt && calibration.stepsPerDegreeAlt > 0.0) {
+    portENTER_CRITICAL(&axis.mux);
+    int64_t candidate = axis.stepCounter + direction;
+    double candidateDegrees = stepsToAltitudeDegreesRaw(candidate);
+    if (candidateDegrees < kMinAltitudeDegrees ||
+        candidateDegrees > kMaxAltitudeDegrees) {
+      axis.stepCounter = clampAltitudeSteps(axis.stepCounter);
+      axis.nextStepDueUs = 0;
+      allowStep = false;
+    } else {
+      axis.stepCounter = candidate;
+      axis.lastDirection = direction;
+      axis.nextStepDueUs = nextDue;
+    }
+    portEXIT_CRITICAL(&axis.mux);
+  } else {
+    portENTER_CRITICAL(&axis.mux);
+    axis.stepCounter += direction;
+    axis.lastDirection = direction;
+    axis.nextStepDueUs = nextDue;
+    portEXIT_CRITICAL(&axis.mux);
+  }
+
+  if (!allowStep) {
+    return;
+  }
+
   digitalWrite(axis.dirPin, direction > 0 ? HIGH : LOW);
   digitalWrite(axis.stepPin, HIGH);
   esp_rom_delay_us(kStepPulseWidthUs);
   digitalWrite(axis.stepPin, LOW);
-
-  portENTER_CRITICAL(&axis.mux);
-  axis.stepCounter += direction;
-  axis.lastDirection = direction;
-  axis.nextStepDueUs = nextDue;
-  portEXIT_CRITICAL(&axis.mux);
 }
 
 uint64_t updateAxis(AxisState& axis, uint64_t nowUs) {
@@ -265,6 +312,16 @@ void setManualStepsPerSecond(Axis axis, double stepsPerSecond) {
     stepsPerSecond = 0.0;
   }
 
+  AxisState& axisState = getAxisState(axis);
+  if (axis == Axis::Alt && calibration.stepsPerDegreeAlt > 0.0) {
+    int64_t currentSteps = getAxisCounter(axisState);
+    double currentAlt = stepsToAltDegrees(currentSteps);
+    if ((stepsPerSecond > 0.0 && currentAlt >= kMaxAltitudeDegrees) ||
+        (stepsPerSecond < 0.0 && currentAlt <= kMinAltitudeDegrees)) {
+      stepsPerSecond = 0.0;
+    }
+  }
+
   ManualAxisControl& control = getManualControl(axis);
   const auto& profile = storage::getConfig().panningProfile;
   double stepsPerDegree = getAxisStepsPerDegree(axis);
@@ -314,7 +371,7 @@ void setManualStepsPerSecond(Axis axis, double stepsPerSecond) {
   }
 
   control.currentStepsPerSecond = current;
-  setAxisUserContribution(getAxisState(axis), current);
+  setAxisUserContribution(axisState, current);
 }
 
 void setGotoStepsPerSecond(Axis axis, double stepsPerSecond) {
@@ -359,6 +416,9 @@ void setTrackingRates(double azDegPerSec, double altDegPerSec) {
 int64_t getStepCount(Axis axis) { return getAxisCounter(getAxisState(axis)); }
 
 void setStepCount(Axis axis, int64_t value) {
+  if (axis == Axis::Alt) {
+    value = clampAltitudeSteps(value);
+  }
   setAxisCounter(getAxisState(axis), value);
 }
 
@@ -373,8 +433,10 @@ double stepsToAzDegrees(int64_t steps) {
 }
 
 double stepsToAltDegrees(int64_t steps) {
-  double adjusted = static_cast<double>(steps - calibration.altHomeOffset);
-  double degrees = adjusted / calibration.stepsPerDegreeAlt;
+  if (calibration.stepsPerDegreeAlt <= 0.0) {
+    return 0.0;
+  }
+  double degrees = stepsToAltitudeDegreesRaw(steps);
   if (degrees > 180.0 || degrees < -180.0) {
     degrees = fmod(degrees, 360.0);
     if (degrees > 180.0) {
@@ -383,7 +445,7 @@ double stepsToAltDegrees(int64_t steps) {
       degrees += 360.0;
     }
   }
-  return degrees;
+  return clampAltitudeDegrees(degrees);
 }
 
 int64_t azDegreesToSteps(double degrees) {
@@ -396,9 +458,17 @@ int64_t azDegreesToSteps(double degrees) {
 }
 
 int64_t altDegreesToSteps(double degrees) {
-  double steps = degrees * calibration.stepsPerDegreeAlt + calibration.altHomeOffset;
+  if (calibration.stepsPerDegreeAlt <= 0.0) {
+    return 0;
+  }
+  double clamped = clampAltitudeDegrees(degrees);
+  double steps = clamped * calibration.stepsPerDegreeAlt + calibration.altHomeOffset;
   return static_cast<int64_t>(llround(steps));
 }
+
+double getMinAltitudeDegrees() { return kMinAltitudeDegrees; }
+
+double getMaxAltitudeDegrees() { return kMaxAltitudeDegrees; }
 
 void applyCalibration(const AxisCalibration& newCalibration) {
   calibration = newCalibration;

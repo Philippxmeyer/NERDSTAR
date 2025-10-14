@@ -103,6 +103,7 @@ struct GotoRuntimeState {
   double targetRaHours;
   double targetDecDegrees;
   int targetCatalogIndex;
+  bool resumeTracking;
 };
 
 struct TrackingState {
@@ -124,7 +125,8 @@ GotoRuntimeState gotoRuntime{false,
                              DateTime(),
                              0.0,
                              0.0,
-                             -1};
+                             -1,
+                             true};
 
 TrackingState tracking{false, 0.0, 0.0, -1, 0.0, 0.0, false};
 
@@ -189,6 +191,7 @@ constexpr const char* kMainMenuItems[] = {"Status",
                                           "Catalog",
                                           "Goto Selected",
                                           "Goto RA/Dec",
+                                          "Park",
                                           "Setup"};
 constexpr size_t kMainMenuCount = sizeof(kMainMenuItems) / sizeof(kMainMenuItems[0]);
 
@@ -226,6 +229,7 @@ void setUiState(UiState state) {
 
 void abortGoto();
 bool startGotoToCoordinates(double raHours, double decDegrees, const String& label);
+bool startParkPosition();
 
 void drawHeader() {
   display.setTextColor(SSD1306_WHITE);
@@ -1730,7 +1734,8 @@ bool planGotoTarget(const String& targetName, int targetCatalogIndex, ComputeFn 
   double azNow;
   double altNow;
   DateTime timeNow;
-  if (!computeTarget(now, 0.0, raNow, decNow, azNow, altNow, timeNow) || altNow < 0.0) {
+  if (!computeTarget(now, 0.0, raNow, decNow, azNow, altNow, timeNow) ||
+      altNow < motion::getMinAltitudeDegrees()) {
     showInfo("Below horizon");
     return false;
   }
@@ -1749,7 +1754,8 @@ bool planGotoTarget(const String& targetName, int targetCatalogIndex, ComputeFn 
   double azFuture;
   double altFuture;
   DateTime arrivalTime;
-  if (!computeTarget(now, estimatedDuration, raFuture, decFuture, azFuture, altFuture, arrivalTime) || altFuture < 0.0) {
+  if (!computeTarget(now, estimatedDuration, raFuture, decFuture, azFuture, altFuture, arrivalTime) ||
+      altFuture < motion::getMinAltitudeDegrees()) {
     showInfo("Below horizon");
     return false;
   }
@@ -1758,19 +1764,27 @@ bool planGotoTarget(const String& targetName, int targetCatalogIndex, ComputeFn 
   int64_t currentAltSteps = motion::getStepCount(Axis::Alt);
   int64_t targetAzSteps =
       currentAzSteps + static_cast<int64_t>(llround(shortestAngularDistance(currentAz, azFuture) * cal.stepsPerDegreeAz));
-  int64_t targetAltSteps =
-      currentAltSteps + static_cast<int64_t>(llround((altFuture - currentAlt) * cal.stepsPerDegreeAlt));
+  double clampedAltFuture =
+      std::clamp(altFuture, motion::getMinAltitudeDegrees(), motion::getMaxAltitudeDegrees());
+  int64_t targetAltSteps = motion::altDegreesToSteps(clampedAltFuture);
 
   gotoRuntime.active = true;
   gotoRuntime.az = initAxisRuntime(Axis::Az, targetAzSteps);
   gotoRuntime.alt = initAxisRuntime(Axis::Alt, targetAltSteps);
   gotoRuntime.profile = profile;
-  gotoRuntime.estimatedDurationSec = estimatedDuration;
+  double azDiffRemaining = static_cast<double>(targetAzSteps - currentAzSteps);
+  double altDiffRemaining = static_cast<double>(targetAltSteps - currentAltSteps);
+  double durationAzFuture =
+      computeTravelTimeSteps(azDiffRemaining, profile.maxSpeedAz, profile.accelerationAz, profile.decelerationAz);
+  double durationAltFuture =
+      computeTravelTimeSteps(altDiffRemaining, profile.maxSpeedAlt, profile.accelerationAlt, profile.decelerationAlt);
+  gotoRuntime.estimatedDurationSec = std::max(durationAzFuture, durationAltFuture) + 1.0;
   gotoRuntime.lastUpdateMs = millis();
   gotoRuntime.startTime = now;
   gotoRuntime.targetRaHours = raFuture;
   gotoRuntime.targetDecDegrees = decFuture;
   gotoRuntime.targetCatalogIndex = targetCatalogIndex;
+  gotoRuntime.resumeTracking = true;
 
   systemState.gotoActive = true;
   systemState.azGotoTarget = targetAzSteps;
@@ -1820,6 +1834,13 @@ void completeGotoSuccess() {
   motion::clearGotoRates();
   systemState.gotoActive = false;
   gotoRuntime.active = false;
+  if (!gotoRuntime.resumeTracking) {
+    showInfo("Parked");
+    stopTracking();
+    gotoRuntime.resumeTracking = true;
+    return;
+  }
+
   showInfo("Goto done");
 
   double azDeg = 0.0;
@@ -1835,6 +1856,7 @@ void abortGoto() {
   motion::clearGotoRates();
   gotoRuntime.active = false;
   systemState.gotoActive = false;
+  gotoRuntime.resumeTracking = true;
   stopTracking();
 }
 
@@ -1873,6 +1895,8 @@ void updateTracking() {
 
   double desiredAz = wrapAngle360(azDeg + tracking.offsetAzDeg);
   double desiredAlt = altDeg + tracking.offsetAltDeg;
+  desiredAlt =
+      std::clamp(desiredAlt, motion::getMinAltitudeDegrees(), motion::getMaxAltitudeDegrees());
   double currentAz = motion::stepsToAzDegrees(motion::getStepCount(Axis::Az));
   double currentAlt = motion::stepsToAltDegrees(motion::getStepCount(Axis::Alt));
 
@@ -1952,6 +1976,50 @@ bool startGotoToCoordinates(double raHours, double decDegrees, const String& lab
     return computeManualTarget(raHours, decDegrees, start, secondsAhead, outRa, outDec, azDeg, altDeg, targetTime);
   };
   return planGotoTarget(label, -1, compute);
+}
+
+bool startParkPosition() {
+  const AxisCalibration& cal = storage::getConfig().axisCalibration;
+  if (cal.stepsPerDegreeAz <= 0.0 || cal.stepsPerDegreeAlt <= 0.0) {
+    showInfo("Calibrate axes");
+    return false;
+  }
+
+  if (gotoRuntime.active) {
+    abortGoto();
+  }
+
+  stopTracking();
+
+  GotoProfileSteps profile = toProfileSteps(storage::getConfig().gotoProfile, cal);
+  int64_t currentAzSteps = motion::getStepCount(Axis::Az);
+  int64_t currentAltSteps = motion::getStepCount(Axis::Alt);
+  int64_t targetAzSteps = currentAzSteps;
+  int64_t targetAltSteps = motion::altDegreesToSteps(motion::getMaxAltitudeDegrees());
+
+  gotoRuntime.active = true;
+  gotoRuntime.az = initAxisRuntime(Axis::Az, targetAzSteps);
+  gotoRuntime.alt = initAxisRuntime(Axis::Alt, targetAltSteps);
+  gotoRuntime.profile = profile;
+  double durationAz = computeTravelTimeSteps(static_cast<double>(targetAzSteps - currentAzSteps),
+                                             profile.maxSpeedAz, profile.accelerationAz, profile.decelerationAz);
+  double durationAlt = computeTravelTimeSteps(static_cast<double>(targetAltSteps - currentAltSteps),
+                                              profile.maxSpeedAlt, profile.accelerationAlt, profile.decelerationAlt);
+  gotoRuntime.estimatedDurationSec = std::max(durationAz, durationAlt) + 1.0;
+  gotoRuntime.lastUpdateMs = millis();
+  gotoRuntime.startTime = currentDateTime();
+  gotoRuntime.targetRaHours = 0.0;
+  gotoRuntime.targetDecDegrees = motion::getMaxAltitudeDegrees();
+  gotoRuntime.targetCatalogIndex = -1;
+  gotoRuntime.resumeTracking = false;
+
+  systemState.gotoActive = true;
+  systemState.azGotoTarget = targetAzSteps;
+  systemState.altGotoTarget = targetAltSteps;
+  gotoTargetName = sanitizeForDisplay("Park");
+  motion::clearGotoRates();
+  showInfo("Parking");
+  return true;
 }
 
 void startGotoToSelected() {
@@ -2082,6 +2150,9 @@ void handleMainMenuInput(int delta) {
       enterGotoCoordinateEntry();
       break;
     case 7:
+      startParkPosition();
+      break;
+    case 8:
       enterSetupMenu();
       break;
     default:
