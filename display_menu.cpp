@@ -1611,13 +1611,6 @@ void applyRtcEdit() {
   setUiState(UiState::SetupMenu);
 }
 
-void applyNetworkTime(const DateTime& localTime) {
-  if (rtcAvailable) {
-    rtc.adjust(localTime);
-  }
-  storage::setRtcEpoch(localTime.unixtime());
-}
-
 void startJoystickCalibrationFlow() {
   showCalibrationStart();
   auto calibration = input::calibrateJoystick();
@@ -2521,6 +2514,13 @@ void handlePolarAlignInput() {
 }
 
 }  // namespace
+
+void applyNetworkTime(const DateTime& localTime) {
+  if (rtcAvailable) {
+    rtc.adjust(localTime);
+  }
+  storage::setRtcEpoch(localTime.unixtime());
+}
 
 void stopTracking() {
   tracking.active = false;
