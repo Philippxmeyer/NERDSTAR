@@ -4,6 +4,8 @@
 
 #include "calibration.h"
 
+enum class DstMode : uint8_t { Off = 0, On = 1, Auto = 2 };
+
 struct SystemConfig {
   uint32_t magic;
   JoystickCalibration joystickCalibration;
@@ -13,11 +15,14 @@ struct SystemConfig {
   double observerLatitudeDeg;
   double observerLongitudeDeg;
   int32_t timezoneOffsetMinutes;
+  DstMode dstMode;
   bool joystickCalibrated;
   bool axisCalibrated;
   bool polarAligned;
   uint32_t lastRtcEpoch;
   GotoProfile panningProfile;
+  char wifiSsid[33];
+  char wifiPassword[65];
 };
 
 namespace storage {
@@ -41,6 +46,11 @@ void setPanningProfile(const GotoProfile& profile);
 void setPolarAligned(bool aligned);
 void setRtcEpoch(uint32_t epoch);
 void setObserverLocation(double latitudeDeg, double longitudeDeg, int32_t timezoneMinutes);
+void setDstMode(DstMode mode);
+bool hasWifiCredentials();
+void setWifiCredentials(const char* ssid, const char* password);
+const char* wifiSsid();
+const char* wifiPassword();
 void save();
 size_t getCatalogEntryCount();
 bool readCatalogEntry(size_t index, CatalogEntry& entry);

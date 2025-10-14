@@ -20,6 +20,7 @@
 #include "state.h"
 #include "storage.h"
 #include "text_utils.h"
+#include "time_utils.h"
 #include "wifi_ota.h"
 
 namespace display_menu {
@@ -58,11 +59,12 @@ struct RtcEditState {
   int hour;
   int minute;
   int second;
+  storage::DstMode dstMode;
   int fieldIndex;
 };
 
-RtcEditState rtcEdit{2024, 1, 1, 0, 0, 0, 0};
-constexpr int kRtcFieldCount = 7;
+RtcEditState rtcEdit{2024, 1, 1, 0, 0, 0, storage::DstMode::Auto, 0};
+constexpr int kRtcFieldCount = 8;
 
 struct AxisCalibrationState {
   int step;
@@ -421,9 +423,8 @@ DateTime currentDateTime() {
 }
 
 DateTime toUtc(const DateTime& local) {
-  int32_t offsetMinutes = storage::getConfig().timezoneOffsetMinutes;
-  TimeSpan offset(static_cast<int32_t>(offsetMinutes) * 60);
-  return local - offset;
+  time_t epoch = time_utils::toUtcEpoch(local);
+  return DateTime(epoch);
 }
 
 double hourFraction(const DateTime& time) {
@@ -719,7 +720,13 @@ void drawSetupMenu() {
     display.setCursor(0, y);
     display.print(kSetupMenuItems[index]);
     if (index == kSetupMenuWifiIndex) {
-      display.print(wifi_ota::isEnabled() ? ": On" : ": Off");
+      if (!wifi_ota::credentialsConfigured()) {
+        display.print(": NoCfg");
+      } else if (wifi_ota::isEnabled()) {
+        display.print(wifi_ota::isConnected() ? ": On" : ": Conn");
+      } else {
+        display.print(": Off");
+      }
     }
     if (selected) {
       display.setTextColor(SSD1306_WHITE);
@@ -736,8 +743,8 @@ void drawRtcEditor() {
   display.print("RTC Setup");
   int y = 24;
   const char* labels[] = {"Year", "Month", "Day", "Hour", "Min", "Sec"};
-  int values[] = {rtcEdit.year,       rtcEdit.month,  rtcEdit.day,
-                  rtcEdit.hour,       rtcEdit.minute, rtcEdit.second};
+  int values[] = {rtcEdit.year, rtcEdit.month, rtcEdit.day,
+                  rtcEdit.hour, rtcEdit.minute, rtcEdit.second};
   for (int i = 0; i < 6; ++i) {
     bool selected = rtcEdit.fieldIndex == i;
     if (selected) {
@@ -753,6 +760,23 @@ void drawRtcEditor() {
     }
     y += 8;
   }
+
+  const char* dstLabels[] = {"Off", "On", "Auto"};
+  int dstIndex = static_cast<int>(rtcEdit.dstMode);
+  dstIndex = std::clamp(dstIndex, 0, 2);
+  bool dstSelected = rtcEdit.fieldIndex == 6;
+  if (dstSelected) {
+    display.fillRect(0, y, config::OLED_WIDTH, 8, SSD1306_WHITE);
+    display.setTextColor(SSD1306_BLACK);
+  } else {
+    display.setTextColor(SSD1306_WHITE);
+  }
+  display.setCursor(0, y);
+  display.printf("DST: %s", dstLabels[dstIndex]);
+  if (dstSelected) {
+    display.setTextColor(SSD1306_WHITE);
+  }
+  y += 8;
 
   bool backSelected = rtcEdit.fieldIndex == kRtcFieldCount - 1;
   if (backSelected) {
@@ -1529,7 +1553,9 @@ void enterRtcEditor() {
   } else {
     now = DateTime(2024, 1, 1, 0, 0, 0);
   }
-  rtcEdit = {now.year(), now.month(), now.day(), now.hour(), now.minute(), now.second(), 0};
+  rtcEdit = {now.year(),      now.month(),      now.day(),
+             now.hour(),      now.minute(),     now.second(),
+             storage::getConfig().dstMode, 0};
   setUiState(UiState::SetRtc);
 }
 
@@ -1538,9 +1564,17 @@ void applyRtcEdit() {
   if (rtcAvailable) {
     rtc.adjust(updated);
   }
+  storage::setDstMode(rtcEdit.dstMode);
   storage::setRtcEpoch(updated.unixtime());
   showInfo("RTC updated");
   setUiState(UiState::SetupMenu);
+}
+
+void applyNetworkTime(const DateTime& localTime) {
+  if (rtcAvailable) {
+    rtc.adjust(localTime);
+  }
+  storage::setRtcEpoch(localTime.unixtime());
 }
 
 void startJoystickCalibrationFlow() {
@@ -2129,6 +2163,10 @@ void handleSetupMenuInput(int delta) {
       startBacklashCalibration();
       break;
     case kSetupMenuWifiIndex: {
+      if (!wifi_ota::credentialsConfigured()) {
+        showInfo("WiFi creds missing", 2000);
+        break;
+      }
       bool enable = !wifi_ota::isEnabled();
       wifi_ota::setEnabled(enable);
       String error;
@@ -2137,7 +2175,7 @@ void handleSetupMenuInput(int delta) {
         message += error.isEmpty() ? "failed" : error;
         showInfo(message, 2000);
       } else if (enable) {
-        showInfo(String("WiFi AP: ") + wifi_ota::accessPointSsid(), 2500);
+        showInfo(String("WiFi: ") + wifi_ota::ssid(), 2500);
       } else {
         showInfo("WiFi disabled", 1500);
       }
@@ -2176,6 +2214,14 @@ void handleRtcInput(int delta) {
       case 5:
         rtcEdit.second = (rtcEdit.second + delta + 60) % 60;
         break;
+      case 6: {
+        int mode = static_cast<int>(rtcEdit.dstMode);
+        mode += delta;
+        while (mode < 0) mode += 3;
+        while (mode >= 3) mode -= 3;
+        rtcEdit.dstMode = static_cast<storage::DstMode>(mode);
+        break;
+      }
     }
   }
   if (input::consumeJoystickPress()) {

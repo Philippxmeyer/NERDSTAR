@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <EEPROM.h>
 #include <math.h>
+#include <string.h>
 
 #include "config.h"
 
@@ -31,11 +32,16 @@ SystemConfig systemConfig{
     config::OBSERVER_LATITUDE_DEG,
     config::OBSERVER_LONGITUDE_DEG,
     60,
+    DstMode::Auto,
     false,
     false,
     false,
     0,
-    {3.0f, 1.0f, 1.0f}};
+    {3.0f, 1.0f, 1.0f},
+    {0},
+    {0}};
+
+static_assert(sizeof(SystemConfig) <= kConfigStorageSize, "SystemConfig too large for config storage");
 
 static_assert(sizeof(storage::CatalogEntry) == 9, "CatalogEntry packing mismatch");
 static_assert(sizeof(CatalogHeader) == 14, "CatalogHeader packing mismatch");
@@ -70,6 +76,7 @@ void applyDefaults() {
   systemConfig.observerLatitudeDeg = config::OBSERVER_LATITUDE_DEG;
   systemConfig.observerLongitudeDeg = config::OBSERVER_LONGITUDE_DEG;
   systemConfig.timezoneOffsetMinutes = 60;
+  systemConfig.dstMode = DstMode::Auto;
   systemConfig.joystickCalibrated = false;
   systemConfig.axisCalibrated = false;
   systemConfig.polarAligned = false;
@@ -77,6 +84,8 @@ void applyDefaults() {
   systemConfig.panningProfile.maxSpeedDegPerSec = 3.0f;
   systemConfig.panningProfile.accelerationDegPerSec2 = 1.0f;
   systemConfig.panningProfile.decelerationDegPerSec2 = 1.0f;
+  memset(systemConfig.wifiSsid, 0, sizeof(systemConfig.wifiSsid));
+  memset(systemConfig.wifiPassword, 0, sizeof(systemConfig.wifiPassword));
 }
 
 bool profileIsInvalid(const GotoProfile& profile) {
@@ -157,6 +166,11 @@ bool init() {
     if (systemConfig.timezoneOffsetMinutes < -720 || systemConfig.timezoneOffsetMinutes > 840) {
       systemConfig.timezoneOffsetMinutes = 60;
     }
+    if (static_cast<uint8_t>(systemConfig.dstMode) > static_cast<uint8_t>(DstMode::Auto)) {
+      systemConfig.dstMode = DstMode::Auto;
+    }
+    systemConfig.wifiSsid[sizeof(systemConfig.wifiSsid) - 1] = '\0';
+    systemConfig.wifiPassword[sizeof(systemConfig.wifiPassword) - 1] = '\0';
   }
 
   ensureCatalogData();
@@ -208,6 +222,42 @@ void setObserverLocation(double latitudeDeg, double longitudeDeg, int32_t timezo
   systemConfig.timezoneOffsetMinutes = timezoneMinutes;
   saveConfigInternal();
 }
+
+void setDstMode(DstMode mode) {
+  if (mode == systemConfig.dstMode) {
+    return;
+  }
+  systemConfig.dstMode = mode;
+  saveConfigInternal();
+}
+
+bool hasWifiCredentials() { return systemConfig.wifiSsid[0] != '\0'; }
+
+void setWifiCredentials(const char* ssid, const char* password) {
+  if (!ssid) ssid = "";
+  if (!password) password = "";
+
+  char newSsid[sizeof(systemConfig.wifiSsid)];
+  char newPassword[sizeof(systemConfig.wifiPassword)];
+  strncpy(newSsid, ssid, sizeof(newSsid) - 1);
+  newSsid[sizeof(newSsid) - 1] = '\0';
+  strncpy(newPassword, password, sizeof(newPassword) - 1);
+  newPassword[sizeof(newPassword) - 1] = '\0';
+
+  if (strcmp(systemConfig.wifiSsid, newSsid) == 0 && strcmp(systemConfig.wifiPassword, newPassword) == 0) {
+    return;
+  }
+
+  strncpy(systemConfig.wifiSsid, newSsid, sizeof(systemConfig.wifiSsid));
+  systemConfig.wifiSsid[sizeof(systemConfig.wifiSsid) - 1] = '\0';
+  strncpy(systemConfig.wifiPassword, newPassword, sizeof(systemConfig.wifiPassword));
+  systemConfig.wifiPassword[sizeof(systemConfig.wifiPassword) - 1] = '\0';
+  saveConfigInternal();
+}
+
+const char* wifiSsid() { return systemConfig.wifiSsid; }
+
+const char* wifiPassword() { return systemConfig.wifiPassword; }
 
 void save() { saveConfigInternal(); }
 

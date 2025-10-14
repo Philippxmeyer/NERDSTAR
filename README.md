@@ -147,6 +147,8 @@ parallel über den integrierten Serial-Port und bleibt störungsfrei.
 
 - [Bedienungsanleitung](docs/BEDIENUNGSANLEITUNG.md) mit Schritt-für-Schritt-Anweisungen
 - Beispiel-Datenbank: [`data/catalog.xml`](data/catalog.xml) – dient als Quelle für den eingebauten EEPROM-Katalog
+- EEPROM-Template: [`data/eeprom_template.json`](data/eeprom_template.json) – hier lassen sich die WLAN-Zugangsdaten für den
+  Client-Betrieb hinterlegen
 - Alle Kalibrierungen & Zustände werden im EEPROM des ESP32 abgelegt
 
 ---
