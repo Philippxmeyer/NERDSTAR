@@ -26,6 +26,8 @@ double stepsToAzDegrees(int64_t steps);
 double stepsToAltDegrees(int64_t steps);
 int64_t azDegreesToSteps(double degrees);
 int64_t altDegreesToSteps(double degrees);
+double getMinAltitudeDegrees();
+double getMaxAltitudeDegrees();
 void applyCalibration(const AxisCalibration& calibration);
 void setBacklash(const BacklashConfig& backlash);
 int32_t getBacklashSteps(Axis axis);
