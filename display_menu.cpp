@@ -59,9 +59,10 @@ struct RtcEditState {
   int minute;
   int second;
   int fieldIndex;
+  int actionIndex;
 };
 
-RtcEditState rtcEdit{2024, 1, 1, 0, 0, 0, 0};
+RtcEditState rtcEdit{2024, 1, 1, 0, 0, 0, 0, 0};
 constexpr int kRtcFieldCount = 7;
 
 struct AxisCalibrationState {
@@ -136,6 +137,7 @@ struct SpeedProfileState {
   float deceleration;
   int fieldIndex;
   SpeedEditMode mode;
+  int actionIndex;
 };
 
 struct BacklashCalibrationState {
@@ -146,7 +148,7 @@ struct BacklashCalibrationState {
   int64_t altEnd;
 };
 
-SpeedProfileState speedProfileState{0.0f, 0.0f, 0.0f, 0, SpeedEditMode::Goto};
+SpeedProfileState speedProfileState{0.0f, 0.0f, 0.0f, 0, SpeedEditMode::Goto, 0};
 BacklashCalibrationState backlashState{0, 0, 0, 0, 0};
 
 struct LocationEditState {
@@ -154,6 +156,7 @@ struct LocationEditState {
   double longitudeDeg;
   int32_t timezoneMinutes;
   int fieldIndex;
+  int actionIndex;
 };
 
 struct GotoCoordinateState {
@@ -169,7 +172,7 @@ struct GotoCoordinateState {
 
 constexpr int kGotoCoordinateFieldCount = 8;
 
-LocationEditState locationEdit{0.0, 0.0, 60, 0};
+LocationEditState locationEdit{0.0, 0.0, 60, 0, 0};
 GotoCoordinateState gotoCoordinateState{0, 0, 0, false, 0, 0, 0, 0};
 double manualGotoRaHours = 0.0;
 double manualGotoDecDegrees = 0.0;
@@ -754,21 +757,21 @@ void drawRtcEditor() {
     y += 8;
   }
 
-  bool backSelected = rtcEdit.fieldIndex == kRtcFieldCount - 1;
-  if (backSelected) {
+  bool actionSelected = rtcEdit.fieldIndex == kRtcFieldCount - 1;
+  if (actionSelected) {
     display.fillRect(0, y, config::OLED_WIDTH, 8, SSD1306_WHITE);
     display.setTextColor(SSD1306_BLACK);
   } else {
     display.setTextColor(SSD1306_WHITE);
   }
   display.setCursor(0, y);
-  display.print("Back");
-  if (backSelected) {
+  display.print(rtcEdit.actionIndex == 0 ? "Save" : "Back");
+  if (actionSelected) {
     display.setTextColor(SSD1306_WHITE);
   }
 
   display.setCursor(0, 60);
-  display.print("Joy=Next Enc=Save/Back");
+  display.print("Enc=Next/Conf Joy=Cancel");
 }
 
 void drawLocationSetup() {
@@ -805,21 +808,21 @@ void drawLocationSetup() {
   snprintf(buffer, sizeof(buffer), "TZ: %c%02d:%02d", sign, tzHours, tzMinutes);
   drawRow(2, buffer);
 
-  bool backSelected = locationEdit.fieldIndex == kLocationFieldCount - 1;
-  if (backSelected) {
+  bool actionSelected = locationEdit.fieldIndex == kLocationFieldCount - 1;
+  if (actionSelected) {
     display.fillRect(0, y, config::OLED_WIDTH, 8, SSD1306_WHITE);
     display.setTextColor(SSD1306_BLACK);
   } else {
     display.setTextColor(SSD1306_WHITE);
   }
   display.setCursor(0, y);
-  display.print("Back");
-  if (backSelected) {
+  display.print(locationEdit.actionIndex == 0 ? "Save" : "Back");
+  if (actionSelected) {
     display.setTextColor(SSD1306_WHITE);
   }
 
   display.setCursor(0, 60);
-  display.print("Joy=Next Enc=Save/Back");
+  display.print("Enc=Next/Conf Joy=Cancel");
 }
 
 void drawCatalogTypeMenu() {
@@ -1035,20 +1038,20 @@ void drawSpeedProfileSetup() {
     }
     y += 8;
   }
-  bool backSelected = speedProfileState.fieldIndex == kSpeedProfileFieldCount - 1;
-  if (backSelected) {
+  bool actionSelected = speedProfileState.fieldIndex == kSpeedProfileFieldCount - 1;
+  if (actionSelected) {
     display.fillRect(0, y, config::OLED_WIDTH, 8, SSD1306_WHITE);
     display.setTextColor(SSD1306_BLACK);
   } else {
     display.setTextColor(SSD1306_WHITE);
   }
   display.setCursor(0, y);
-  display.print("Back");
-  if (backSelected) {
+  display.print(speedProfileState.actionIndex == 0 ? "Save" : "Back");
+  if (actionSelected) {
     display.setTextColor(SSD1306_WHITE);
   }
   display.setCursor(0, 60);
-  display.print("Joy=Next Enc=Save/Back");
+  display.print("Enc=Next/Conf Joy=Cancel");
 }
 
 void drawBacklashCalibration() {
@@ -1117,6 +1120,7 @@ void enterLocationSetup() {
   locationEdit.longitudeDeg = config.observerLongitudeDeg;
   locationEdit.timezoneMinutes = config.timezoneOffsetMinutes;
   locationEdit.fieldIndex = 0;
+  locationEdit.actionIndex = 0;
   setUiState(UiState::LocationSetup);
 }
 
@@ -1127,6 +1131,7 @@ void enterGotoSpeedSetup() {
   speedProfileState.deceleration = profile.decelerationDegPerSec2;
   speedProfileState.fieldIndex = 0;
   speedProfileState.mode = SpeedEditMode::Goto;
+  speedProfileState.actionIndex = 0;
   setUiState(UiState::GotoSpeed);
 }
 
@@ -1137,85 +1142,112 @@ void enterPanningSpeedSetup() {
   speedProfileState.deceleration = profile.decelerationDegPerSec2;
   speedProfileState.fieldIndex = 0;
   speedProfileState.mode = SpeedEditMode::Panning;
+  speedProfileState.actionIndex = 0;
   setUiState(UiState::PanningSpeed);
 }
 
 void handleSpeedProfileInput(int delta) {
-  if (delta != 0 && speedProfileState.fieldIndex < kSpeedProfileFieldCount - 1) {
-    constexpr float step = 0.1f;
-    switch (speedProfileState.fieldIndex) {
-      case 0:
-        speedProfileState.maxSpeed =
-            std::clamp(speedProfileState.maxSpeed + delta * step, 0.5f, 20.0f);
-        break;
-      case 1:
-        speedProfileState.acceleration =
-            std::clamp(speedProfileState.acceleration + delta * step, 0.1f, 20.0f);
-        break;
-      case 2:
-        speedProfileState.deceleration =
-            std::clamp(speedProfileState.deceleration + delta * step, 0.1f, 20.0f);
-        break;
+  if (delta != 0) {
+    if (speedProfileState.fieldIndex < kSpeedProfileFieldCount - 1) {
+      constexpr float step = 0.1f;
+      switch (speedProfileState.fieldIndex) {
+        case 0:
+          speedProfileState.maxSpeed =
+              std::clamp(speedProfileState.maxSpeed + delta * step, 0.5f, 20.0f);
+          break;
+        case 1:
+          speedProfileState.acceleration =
+              std::clamp(speedProfileState.acceleration + delta * step, 0.1f, 20.0f);
+          break;
+        case 2:
+          speedProfileState.deceleration =
+              std::clamp(speedProfileState.deceleration + delta * step, 0.1f, 20.0f);
+          break;
+      }
+    } else {
+      int step = delta > 0 ? 1 : -1;
+      speedProfileState.actionIndex = (speedProfileState.actionIndex + step + 2) % 2;
     }
   }
   if (input::consumeJoystickPress()) {
-    speedProfileState.fieldIndex = (speedProfileState.fieldIndex + 1) % kSpeedProfileFieldCount;
+    setUiState(UiState::SetupMenu);
+    showInfo(speedProfileState.mode == SpeedEditMode::Goto ? "Goto canceled"
+                                                           : "Pan canceled");
+    return;
   }
   if (input::consumeEncoderClick()) {
-    bool isBack = speedProfileState.fieldIndex == kSpeedProfileFieldCount - 1;
-    if (isBack) {
-      setUiState(UiState::SetupMenu);
-      showInfo(speedProfileState.mode == SpeedEditMode::Goto ? "Goto unchanged"
-                                                            : "Pan unchanged");
+    if (speedProfileState.fieldIndex < kSpeedProfileFieldCount - 1) {
+      ++speedProfileState.fieldIndex;
+      if (speedProfileState.fieldIndex == kSpeedProfileFieldCount - 1) {
+        speedProfileState.actionIndex = 0;
+      }
       return;
     }
-    GotoProfile profile{speedProfileState.maxSpeed,
-                        speedProfileState.acceleration,
-                        speedProfileState.deceleration};
-    if (speedProfileState.mode == SpeedEditMode::Goto) {
-      storage::setGotoProfile(profile);
-      showInfo("Goto saved");
+    if (speedProfileState.actionIndex == 0) {
+      GotoProfile profile{speedProfileState.maxSpeed,
+                          speedProfileState.acceleration,
+                          speedProfileState.deceleration};
+      if (speedProfileState.mode == SpeedEditMode::Goto) {
+        storage::setGotoProfile(profile);
+        showInfo("Goto saved");
+      } else {
+        storage::setPanningProfile(profile);
+        showInfo("Pan saved");
+      }
     } else {
-      storage::setPanningProfile(profile);
-      showInfo("Pan saved");
+      showInfo(speedProfileState.mode == SpeedEditMode::Goto ? "Goto unchanged"
+                                                            : "Pan unchanged");
     }
     setUiState(UiState::SetupMenu);
   }
 }
 
 void handleLocationInput(int delta) {
-  if (delta != 0 && locationEdit.fieldIndex < kLocationFieldCount - 1) {
-    switch (locationEdit.fieldIndex) {
-      case 0:
-        locationEdit.latitudeDeg =
-            std::clamp(locationEdit.latitudeDeg + delta * 0.1, -90.0, 90.0);
-        break;
-      case 1:
-        locationEdit.longitudeDeg =
-            std::clamp(locationEdit.longitudeDeg + delta * 0.1, -180.0, 180.0);
-        break;
-      case 2: {
-        int stepMinutes = delta * 15;
-        int32_t newTimezone = locationEdit.timezoneMinutes + stepMinutes;
-        locationEdit.timezoneMinutes =
-            std::clamp<int32_t>(newTimezone, -720, 840);
-        break;
+  if (delta != 0) {
+    if (locationEdit.fieldIndex < kLocationFieldCount - 1) {
+      switch (locationEdit.fieldIndex) {
+        case 0:
+          locationEdit.latitudeDeg =
+              std::clamp(locationEdit.latitudeDeg + delta * 0.1, -90.0, 90.0);
+          break;
+        case 1:
+          locationEdit.longitudeDeg =
+              std::clamp(locationEdit.longitudeDeg + delta * 0.1, -180.0, 180.0);
+          break;
+        case 2: {
+          int stepMinutes = delta * 15;
+          int32_t newTimezone = locationEdit.timezoneMinutes + stepMinutes;
+          locationEdit.timezoneMinutes =
+              std::clamp<int32_t>(newTimezone, -720, 840);
+          break;
+        }
       }
+    } else {
+      int step = delta > 0 ? 1 : -1;
+      locationEdit.actionIndex = (locationEdit.actionIndex + step + 2) % 2;
     }
   }
   if (input::consumeJoystickPress()) {
-    locationEdit.fieldIndex = (locationEdit.fieldIndex + 1) % kLocationFieldCount;
+    setUiState(UiState::SetupMenu);
+    showInfo("Location canceled");
+    return;
   }
   if (input::consumeEncoderClick()) {
-    if (locationEdit.fieldIndex == kLocationFieldCount - 1) {
-      setUiState(UiState::SetupMenu);
-      showInfo("Location unchanged");
-    } else {
-      storage::setObserverLocation(
-          locationEdit.latitudeDeg, locationEdit.longitudeDeg, locationEdit.timezoneMinutes);
-      showInfo("Location saved");
-      setUiState(UiState::SetupMenu);
+    if (locationEdit.fieldIndex < kLocationFieldCount - 1) {
+      ++locationEdit.fieldIndex;
+      if (locationEdit.fieldIndex == kLocationFieldCount - 1) {
+        locationEdit.actionIndex = 0;
+      }
+      return;
     }
+    if (locationEdit.actionIndex == 0) {
+      storage::setObserverLocation(locationEdit.latitudeDeg, locationEdit.longitudeDeg,
+                                   locationEdit.timezoneMinutes);
+      showInfo("Location saved");
+    } else {
+      showInfo("Location unchanged");
+    }
+    setUiState(UiState::SetupMenu);
   }
 }
 
@@ -1529,7 +1561,7 @@ void enterRtcEditor() {
   } else {
     now = DateTime(2024, 1, 1, 0, 0, 0);
   }
-  rtcEdit = {now.year(), now.month(), now.day(), now.hour(), now.minute(), now.second(), 0};
+  rtcEdit = {now.year(), now.month(), now.day(), now.hour(), now.minute(), now.second(), 0, 0};
   setUiState(UiState::SetRtc);
 }
 
@@ -2152,41 +2184,55 @@ void handleSetupMenuInput(int delta) {
 }
 
 void handleRtcInput(int delta) {
-  if (delta != 0 && rtcEdit.fieldIndex < kRtcFieldCount - 1) {
-    switch (rtcEdit.fieldIndex) {
-      case 0:
-        rtcEdit.year = std::clamp(rtcEdit.year + delta, 2020, 2100);
-        break;
-      case 1:
-        rtcEdit.month += delta;
-        if (rtcEdit.month < 1) rtcEdit.month = 12;
-        if (rtcEdit.month > 12) rtcEdit.month = 1;
-        break;
-      case 2:
-        rtcEdit.day += delta;
-        if (rtcEdit.day < 1) rtcEdit.day = 31;
-        if (rtcEdit.day > 31) rtcEdit.day = 1;
-        break;
-      case 3:
-        rtcEdit.hour = (rtcEdit.hour + delta + 24) % 24;
-        break;
-      case 4:
-        rtcEdit.minute = (rtcEdit.minute + delta + 60) % 60;
-        break;
-      case 5:
-        rtcEdit.second = (rtcEdit.second + delta + 60) % 60;
-        break;
+  if (delta != 0) {
+    if (rtcEdit.fieldIndex < kRtcFieldCount - 1) {
+      switch (rtcEdit.fieldIndex) {
+        case 0:
+          rtcEdit.year = std::clamp(rtcEdit.year + delta, 2020, 2100);
+          break;
+        case 1:
+          rtcEdit.month += delta;
+          if (rtcEdit.month < 1) rtcEdit.month = 12;
+          if (rtcEdit.month > 12) rtcEdit.month = 1;
+          break;
+        case 2:
+          rtcEdit.day += delta;
+          if (rtcEdit.day < 1) rtcEdit.day = 31;
+          if (rtcEdit.day > 31) rtcEdit.day = 1;
+          break;
+        case 3:
+          rtcEdit.hour = (rtcEdit.hour + delta + 24) % 24;
+          break;
+        case 4:
+          rtcEdit.minute = (rtcEdit.minute + delta + 60) % 60;
+          break;
+        case 5:
+          rtcEdit.second = (rtcEdit.second + delta + 60) % 60;
+          break;
+      }
+    } else {
+      int step = delta > 0 ? 1 : -1;
+      rtcEdit.actionIndex = (rtcEdit.actionIndex + step + 2) % 2;
     }
   }
   if (input::consumeJoystickPress()) {
-    rtcEdit.fieldIndex = (rtcEdit.fieldIndex + 1) % kRtcFieldCount;
+    setUiState(UiState::SetupMenu);
+    showInfo("RTC canceled");
+    return;
   }
   if (input::consumeEncoderClick()) {
-    if (rtcEdit.fieldIndex == kRtcFieldCount - 1) {
+    if (rtcEdit.fieldIndex < kRtcFieldCount - 1) {
+      ++rtcEdit.fieldIndex;
+      if (rtcEdit.fieldIndex == kRtcFieldCount - 1) {
+        rtcEdit.actionIndex = 0;
+      }
+      return;
+    }
+    if (rtcEdit.actionIndex == 0) {
+      applyRtcEdit();
+    } else {
       setUiState(UiState::SetupMenu);
       showInfo("RTC unchanged");
-    } else {
-      applyRtcEdit();
     }
   }
 }
