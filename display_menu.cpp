@@ -59,12 +59,12 @@ struct RtcEditState {
   int hour;
   int minute;
   int second;
-  storage::DstMode dstMode;
+  DstMode dstMode;
   int fieldIndex;
   int actionIndex;
 };
 
-RtcEditState rtcEdit{2024, 1, 1, 0, 0, 0, storage::DstMode::Auto, 0};
+RtcEditState rtcEdit{2024, 1, 1, 0, 0, 0, DstMode::Auto, 0, 0};
 constexpr int kRtcFieldCount = 8;
 
 struct AxisCalibrationState {
@@ -785,8 +785,8 @@ void drawRtcEditor() {
   }
   y += 8;
 
-  bool backSelected = rtcEdit.fieldIndex == kRtcFieldCount - 1;
-  if (backSelected) {
+  bool actionSelected = rtcEdit.fieldIndex == kRtcFieldCount - 1;
+  if (actionSelected) {
     display.fillRect(0, y, config::OLED_WIDTH, 8, SSD1306_WHITE);
     display.setTextColor(SSD1306_BLACK);
   } else {
@@ -1596,7 +1596,7 @@ void enterRtcEditor() {
   }
   rtcEdit = {now.year(),      now.month(),      now.day(),
              now.hour(),      now.minute(),     now.second(),
-             storage::getConfig().dstMode, 0};
+             storage::getConfig().dstMode, 0, 0};
   setUiState(UiState::SetRtc);
 }
 
@@ -2327,7 +2327,7 @@ void handleRtcInput(int delta) {
         mode += delta;
         while (mode < 0) mode += 3;
         while (mode >= 3) mode -= 3;
-        rtcEdit.dstMode = static_cast<storage::DstMode>(mode);
+        rtcEdit.dstMode = static_cast<DstMode>(mode);
         break;
       }
     }
