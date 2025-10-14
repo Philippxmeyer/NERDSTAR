@@ -59,7 +59,9 @@ void stopWifi() {
   lastNtpAttemptMs = 0;
 }
 
-bool credentialsAvailable() { return storage::hasWifiCredentials(); }
+bool credentialsAvailable() {
+  return config::WIFI_STA_SSID && config::WIFI_STA_SSID[0] != '\0';
+}
 
 void beginWifi() {
   ensureIdentity();
@@ -68,7 +70,7 @@ void beginWifi() {
   WiFi.setHostname(otaHostname.c_str());
   WiFi.setAutoReconnect(true);
   ArduinoOTA.setHostname(otaHostname.c_str());
-  WiFi.begin(storage::wifiSsid(), storage::wifiPassword());
+  WiFi.begin(config::WIFI_STA_SSID, config::WIFI_STA_PASSWORD);
   wifiEnabled = true;
   wifiConnected = false;
   otaActive = false;
@@ -143,7 +145,7 @@ void handleDisconnectedState() {
   if (wifiEnabled && credentialsAvailable() &&
       (lastReconnectAttemptMs == 0 || now - lastReconnectAttemptMs >= kReconnectIntervalMs)) {
     WiFi.disconnect(true, true);
-    WiFi.begin(storage::wifiSsid(), storage::wifiPassword());
+    WiFi.begin(config::WIFI_STA_SSID, config::WIFI_STA_PASSWORD);
     lastReconnectAttemptMs = now;
   }
 }
@@ -192,7 +194,7 @@ bool credentialsConfigured() { return credentialsAvailable(); }
 
 bool isConnected() { return wifiConnected && WiFi.status() == WL_CONNECTED; }
 
-const char* ssid() { return storage::wifiSsid(); }
+const char* ssid() { return config::WIFI_STA_SSID; }
 
 void update() {
   if (!wifiEnabled) {

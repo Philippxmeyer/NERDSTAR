@@ -70,6 +70,8 @@ constexpr uint8_t OLED_HEIGHT = 64;
 constexpr const char* WIFI_AP_SSID_PREFIX = "NERDSTAR";
 constexpr const char* WIFI_AP_PASSWORD = "nerdstar";
 constexpr const char* WIFI_HOSTNAME_PREFIX = "nerdstar";
+constexpr const char* WIFI_STA_SSID = "";       // Set to home network SSID
+constexpr const char* WIFI_STA_PASSWORD = "";   // Set to home network password
 
 // Astronomy constants
 constexpr double SIDEREAL_DAY_SECONDS = 86164.0905;

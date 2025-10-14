@@ -65,6 +65,7 @@ struct RtcEditState {
 };
 
 RtcEditState rtcEdit{2024, 1, 1, 0, 0, 0, DstMode::Auto, 0, 0};
+int rtcEditScroll = 0;
 constexpr int kRtcFieldCount = 8;
 
 struct AxisCalibrationState {
@@ -748,57 +749,49 @@ void drawSetupMenu() {
 void drawRtcEditor() {
   display.setCursor(0, 12);
   display.print("RTC Setup");
-  int y = 24;
+  constexpr int kListTop = 20;
+  constexpr int kFooterHeight = kLineHeight;
+  int visibleRows = computeVisibleRows(kListTop, kFooterHeight);
+  if (visibleRows <= 0) {
+    return;
+  }
+  ensureSelectionVisible(rtcEditScroll, rtcEdit.fieldIndex, visibleRows, kRtcFieldCount);
+
   const char* labels[] = {"Year", "Month", "Day", "Hour", "Min", "Sec"};
   int values[] = {rtcEdit.year, rtcEdit.month, rtcEdit.day,
                   rtcEdit.hour, rtcEdit.minute, rtcEdit.second};
-  for (int i = 0; i < 6; ++i) {
-    bool selected = rtcEdit.fieldIndex == i;
+  const char* dstLabels[] = {"Off", "On", "Auto"};
+
+  for (int row = 0; row < visibleRows; ++row) {
+    int index = rtcEditScroll + row;
+    if (index >= kRtcFieldCount) {
+      break;
+    }
+    int y = lineY(kListTop, row);
+    bool selected = index == rtcEdit.fieldIndex;
     if (selected) {
-      display.fillRect(0, y, config::OLED_WIDTH, 8, SSD1306_WHITE);
+      display.fillRect(0, y, config::OLED_WIDTH, kLineHeight, SSD1306_WHITE);
       display.setTextColor(SSD1306_BLACK);
     } else {
       display.setTextColor(SSD1306_WHITE);
     }
     display.setCursor(0, y);
-    display.printf("%s: %02d", labels[i], values[i]);
+    if (index < 6) {
+      display.printf("%s: %02d", labels[index], values[index]);
+    } else if (index == 6) {
+      int dstIndex = std::clamp(static_cast<int>(rtcEdit.dstMode), 0, 2);
+      display.printf("DST: %s", dstLabels[dstIndex]);
+    } else {
+      display.print(rtcEdit.actionIndex == 0 ? "Save" : "Back");
+    }
     if (selected) {
       display.setTextColor(SSD1306_WHITE);
     }
-    y += 8;
   }
 
-  const char* dstLabels[] = {"Off", "On", "Auto"};
-  int dstIndex = static_cast<int>(rtcEdit.dstMode);
-  dstIndex = std::clamp(dstIndex, 0, 2);
-  bool dstSelected = rtcEdit.fieldIndex == 6;
-  if (dstSelected) {
-    display.fillRect(0, y, config::OLED_WIDTH, 8, SSD1306_WHITE);
-    display.setTextColor(SSD1306_BLACK);
-  } else {
-    display.setTextColor(SSD1306_WHITE);
-  }
-  display.setCursor(0, y);
-  display.printf("DST: %s", dstLabels[dstIndex]);
-  if (dstSelected) {
-    display.setTextColor(SSD1306_WHITE);
-  }
-  y += 8;
-
-  bool actionSelected = rtcEdit.fieldIndex == kRtcFieldCount - 1;
-  if (actionSelected) {
-    display.fillRect(0, y, config::OLED_WIDTH, 8, SSD1306_WHITE);
-    display.setTextColor(SSD1306_BLACK);
-  } else {
-    display.setTextColor(SSD1306_WHITE);
-  }
-  display.setCursor(0, y);
-  display.print(rtcEdit.actionIndex == 0 ? "Save" : "Back");
-  if (actionSelected) {
-    display.setTextColor(SSD1306_WHITE);
-  }
-
-  display.setCursor(0, 60);
+  int footerY = config::OLED_HEIGHT - kFooterHeight;
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, footerY);
   display.print("Enc=Next/Conf Joy=Cancel");
 }
 
@@ -1597,6 +1590,7 @@ void enterRtcEditor() {
   rtcEdit = {now.year(),      now.month(),      now.day(),
              now.hour(),      now.minute(),     now.second(),
              storage::getConfig().dstMode, 0, 0};
+  rtcEditScroll = 0;
   setUiState(UiState::SetRtc);
 }
 
@@ -2291,38 +2285,43 @@ void handleSetupMenuInput(int delta) {
 }
 
 void handleRtcInput(int delta) {
-  if (delta != 0 && rtcEdit.fieldIndex < kRtcFieldCount - 1) {
-    switch (rtcEdit.fieldIndex) {
-      case 0:
-        rtcEdit.year = std::clamp(rtcEdit.year + delta, 2020, 2100);
-        break;
-      case 1:
-        rtcEdit.month += delta;
-        if (rtcEdit.month < 1) rtcEdit.month = 12;
-        if (rtcEdit.month > 12) rtcEdit.month = 1;
-        break;
-      case 2:
-        rtcEdit.day += delta;
-        if (rtcEdit.day < 1) rtcEdit.day = 31;
-        if (rtcEdit.day > 31) rtcEdit.day = 1;
-        break;
-      case 3:
-        rtcEdit.hour = (rtcEdit.hour + delta + 24) % 24;
-        break;
-      case 4:
-        rtcEdit.minute = (rtcEdit.minute + delta + 60) % 60;
-        break;
-      case 5:
-        rtcEdit.second = (rtcEdit.second + delta + 60) % 60;
-        break;
-      case 6: {
-        int mode = static_cast<int>(rtcEdit.dstMode);
-        mode += delta;
-        while (mode < 0) mode += 3;
-        while (mode >= 3) mode -= 3;
-        rtcEdit.dstMode = static_cast<DstMode>(mode);
-        break;
+  if (delta != 0) {
+    if (rtcEdit.fieldIndex < kRtcFieldCount - 1) {
+      switch (rtcEdit.fieldIndex) {
+        case 0:
+          rtcEdit.year = std::clamp(rtcEdit.year + delta, 2020, 2100);
+          break;
+        case 1:
+          rtcEdit.month += delta;
+          if (rtcEdit.month < 1) rtcEdit.month = 12;
+          if (rtcEdit.month > 12) rtcEdit.month = 1;
+          break;
+        case 2:
+          rtcEdit.day += delta;
+          if (rtcEdit.day < 1) rtcEdit.day = 31;
+          if (rtcEdit.day > 31) rtcEdit.day = 1;
+          break;
+        case 3:
+          rtcEdit.hour = (rtcEdit.hour + delta + 24) % 24;
+          break;
+        case 4:
+          rtcEdit.minute = (rtcEdit.minute + delta + 60) % 60;
+          break;
+        case 5:
+          rtcEdit.second = (rtcEdit.second + delta + 60) % 60;
+          break;
+        case 6: {
+          int mode = static_cast<int>(rtcEdit.dstMode);
+          mode += delta;
+          while (mode < 0) mode += 3;
+          while (mode >= 3) mode -= 3;
+          rtcEdit.dstMode = static_cast<DstMode>(mode);
+          break;
+        }
       }
+    } else {
+      int step = (delta > 0) ? 1 : -1;
+      rtcEdit.actionIndex = (rtcEdit.actionIndex + step + 2) % 2;
     }
   }
   if (input::consumeJoystickPress()) {
