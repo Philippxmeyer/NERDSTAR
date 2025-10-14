@@ -147,6 +147,8 @@ parallel über den integrierten Serial-Port und bleibt störungsfrei.
 
 - [Bedienungsanleitung](docs/BEDIENUNGSANLEITUNG.md) mit Schritt-für-Schritt-Anweisungen
 - Beispiel-Datenbank: [`data/catalog.xml`](data/catalog.xml) – dient als Quelle für den eingebauten EEPROM-Katalog
+- Kompilierte Daten: [`catalog_data.inc`](catalog_data.inc) – binär eingebetteter Katalogdump, der beim Flashen in den
+  emulierten EEPROM kopiert wird (wird über `tools/build_catalog.py` aus der XML erzeugt)
 - Alle Kalibrierungen & Zustände werden im EEPROM des ESP32 abgelegt
 
 ---
