@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <numeric>
 #include <vector>
 
 #include "storage.h"
@@ -26,6 +27,28 @@ const char* resolveTypeName(uint8_t index) {
   return kTypeNames[index];
 }
 
+bool entryValuesAreValid(const storage::CatalogEntry& candidate, const char* rawName, size_t nameBufferSize) {
+  if (!rawName || rawName[0] == '\0') {
+    return false;
+  }
+  if (candidate.nameLength == 0 || candidate.nameLength >= nameBufferSize) {
+    return false;
+  }
+  if (candidate.typeIndex >= kTypeCount) {
+    return false;
+  }
+  if (candidate.raHoursTimes1000 > 24000) {
+    return false;
+  }
+  if (candidate.decDegreesTimes100 < -9000 || candidate.decDegreesTimes100 > 9000) {
+    return false;
+  }
+  if (candidate.magnitudeTimes10 < -300 || candidate.magnitudeTimes10 > 300) {
+    return false;
+  }
+  return true;
+}
+
 }  // namespace
 
 namespace catalog {
@@ -48,6 +71,9 @@ bool init() {
     if (!storage::readCatalogName(entry.nameOffset, entry.nameLength, nameBuffer, sizeof(nameBuffer))) {
       continue;
     }
+    if (!entryValuesAreValid(entry, nameBuffer, sizeof(nameBuffer))) {
+      continue;
+    }
 
     CatalogObject object;
     object.name = sanitizeForDisplay(String(nameBuffer));
@@ -61,9 +87,36 @@ bool init() {
     object.decDegrees = static_cast<double>(entry.decDegreesTimes100) / 100.0;
     object.magnitude = static_cast<double>(entry.magnitudeTimes10) / 10.0;
     catalogObjects.push_back(std::move(object));
-    size_t objectIndex = catalogObjects.size() - 1;
-    if (entry.typeIndex < kTypeCount) {
-      typeBuckets[entry.typeIndex].push_back(objectIndex);
+  }
+  if (catalogObjects.empty()) {
+    return false;
+  }
+
+  std::vector<size_t> order(catalogObjects.size());
+  std::iota(order.begin(), order.end(), static_cast<size_t>(0));
+  std::sort(order.begin(), order.end(), [&](size_t lhs, size_t rhs) {
+    const CatalogObject& left = catalogObjects[lhs];
+    const CatalogObject& right = catalogObjects[rhs];
+    if (left.typeIndex != right.typeIndex) {
+      return left.typeIndex < right.typeIndex;
+    }
+    return left.name.compareTo(right.name) < 0;
+  });
+
+  std::vector<CatalogObject> sortedObjects;
+  sortedObjects.reserve(catalogObjects.size());
+  for (size_t index : order) {
+    sortedObjects.push_back(std::move(catalogObjects[index]));
+  }
+  catalogObjects = std::move(sortedObjects);
+
+  for (auto& bucket : typeBuckets) {
+    bucket.clear();
+  }
+  for (size_t index = 0; index < catalogObjects.size(); ++index) {
+    uint8_t typeIndex = catalogObjects[index].typeIndex;
+    if (typeIndex < kTypeCount) {
+      typeBuckets[typeIndex].push_back(index);
     }
   }
   for (uint8_t i = 0; i < kTypeCount; ++i) {
@@ -71,7 +124,7 @@ bool init() {
       activeTypes.push_back(i);
     }
   }
-  return !catalogObjects.empty();
+  return true;
 }
 
 size_t size() { return catalogObjects.size(); }
