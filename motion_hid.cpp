@@ -196,6 +196,10 @@ void setBacklash(const BacklashConfig& backlash) {
                 {String(backlash.azSteps), String(backlash.altSteps)});
 }
 
+void setAltitudeLimitsEnabled(bool enabled) {
+  callAndUpdate("SET_ALT_LIMITS_ENABLED", {enabled ? "1" : "0"});
+}
+
 int32_t getBacklashSteps(Axis axis) {
   std::vector<String> payload;
   if (!callAndUpdate("GET_BACKLASH", {String(axisToString(axis))}, &payload)) {
