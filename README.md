@@ -12,7 +12,7 @@ dein Teleskop mit der Präzision eines NASA-Gyros und dem Charme eines Bastelkel
 
 Zwei **TMC2209**-Treiber, ein **Joystick**, ein **OLED**, eine **RTC**
 und ein Hauch Größenwahn ergeben zusammen ein
-**RA/DEC-Steuerungssystem mit µs-Timing und Stil**.
+**Alt/Az-Steuerungssystem mit µs-Timing und Stil**.
 
 > Kein KI-Overkill.
 > Nur ehrlicher Schrittmotor-Schweiß und ein bisschen Mathematik.
@@ -23,14 +23,16 @@ und ein Hauch Größenwahn ergeben zusammen ein
 
 | Kategorie                     | Beschreibung                                                                 |
 | ----------------------------- | ---------------------------------------------------------------------------- |
-| 🔭 **Dual Axis Control**      | Zwei Achsen (RA & DEC) mit unabhängigen µs-Hardware-Timern                  |
+| 🔭 **Dual Axis Control**      | Zwei Achsen (Azimut & Höhe) mit unabhängigen µs-Hardware-Timern             |
 | 🔹 **Joystick Navigation**    | Joystick für manuelles Slewen, Encoder für Menüs                            |
 | 🧭 **Goto & Catalog**         | Objektbibliothek direkt aus dem EEPROM, Auswahl per Encoder, automatisches Goto |
 | 💾 **EEPROM-Katalog**         | 200 vorkonfigurierte Sterne/Nebel/Galaxien/Planeten, beim Start automatisch geladen |
-| 🕒 **RTC DS3231**             | Uhrzeit via Setup-Menü setzen, Grundlage für Planetenpositionen             |
+| 🕒 **RTC & DST**              | Uhrzeit, Sommerzeitmodus und Standort direkt am OLED setzen                 |
+| 🌍 **Standortverwaltung**     | Breitengrad, Längengrad & Zeitzone im Setup-Menü pflegen für korrekte Alt/Az-Berechnungen |
 | 🪐 **Planetenberechnung**     | Schlanker Algorithmus liefert aktuelle RA/Dec für klassische Planeten       |
-| 🔧 **Setup & Kalibrierung**   | Menü für RTC-Zeit, Joystick-Zentrum, Achsenkalibrierung & EEPROM-Speicher   |
-| 📺 **OLED Status Display**    | Zeigt RA/Dec, Tracking-/Goto-Status und gewähltes Ziel                      |
+| 📡 **WiFi OTA + NTP**         | Optionales WLAN für OTA-Updates & NTP-Synchronisierung mit beiden ESP32-Rollen |
+| 🔧 **Setup & Kalibrierung**   | Menü für RTC, Joystick-Zentrum, Achsen-, Backlash- & Geschwindigkeitsprofil |
+| 📺 **OLED Status Display**    | Zeigt Az/Alt, Tracking-/Goto-Status, Ziel und Diagnosewerte                 |
 | ⚙️ **µs-Timersteuerung**      | Stepper laufen so gleichmäßig, dass man sie fast atmen hört                |
 | 🧠 **ESP32 Dual-Core**        | Hauptrechner: Core 1 steuert die Motoren, Core 0 berechnet Kurs & Protokoll |
 | 🔌 **Zwei ESP32**             | Zweiter ESP32-WROOM kümmert sich ausschließlich um HID (Display, Joystick, Persistenz) |
@@ -55,8 +57,8 @@ und irgendwann sagen: „Lauf, kleiner ESP, lauf mit den Sternen.“
 | ---------------------- | ----------------------------------- | ------------------------------------- |
 | **ESP32 (Hauptrechner)** | Kursberechnung + Motorsteuerung      | UART2 TX (17) ↔ HID-RX, UART2 RX (16) ↔ HID-TX |
 | **ESP32-WROOM (HID)**  | Display, Eingaben, EEPROM-Katalog    | UART2 TX (17) ↔ Main-RX, UART2 RX (16) ↔ Main-TX |
-| **TMC2209 (RA)**       | Dreht um die Rektaszensions-Achse   | STEP 25, DIR 26, EN 27, MS1/MS2 via Pull-up = 1/16 µSteps |
-| **TMC2209 (DEC)**      | Dreht um die Deklinations-Achse     | STEP 13, DIR 12, EN 14, MS1/MS2 via Pull-up = 1/16 µSteps |
+| **TMC2209 (Azimut)**   | Dreht um die Azimut-Achse           | STEP 25, DIR 26, EN 27, MS1/MS2 via Pull-up = 1/16 µSteps |
+| **TMC2209 (Höhe)**     | Dreht um die Höhen-Achse            | STEP 13, DIR 12, EN 14, MS1/MS2 via Pull-up = 1/16 µSteps |
 | **OLED (SSD1306)**     | Zeigt alles an, außer Mitleid       | I²C: SDA 21, SCL 22 (HID-ESP32-WROOM) |
 | **RTC (DS3231)**       | Sagt dir, wann du’s verpasst hast   | I²C: SDA 21, SCL 22 (HID-ESP32-WROOM) |
 | **Joystick (KY-023)**  | Steuert alles intuitiv falsch herum | VRx 34, VRy 35, SW 27 (HID-ESP32-WROOM) |
@@ -66,7 +68,7 @@ und irgendwann sagen: „Lauf, kleiner ESP, lauf mit den Sternen.“
 
 #### Hauptrechner-ESP32 → Motortreiber
 
-| Signal                   | Pin am ESP32 (Main) | Anschluss am TMC2209 (RA) | Anschluss am TMC2209 (DEC) |
+| Signal                   | Pin am ESP32 (Main) | Anschluss am TMC2209 (Azimut) | Anschluss am TMC2209 (Höhe) |
 | ------------------------ | ------------------- | ------------------------- | -------------------------- |
 | Enable                   | 27                  | EN                        | EN                         |
 | Richtung (DIR)           | 26                  | DIR                       | –                          |
@@ -98,7 +100,7 @@ und irgendwann sagen: „Lauf, kleiner ESP, lauf mit den Sternen.“
 - Optional: **5 V / 3.3 V** gemeinsam einspeisen, wenn beide Boards aus derselben Quelle versorgt werden
 - Hinweis: Der Link nutzt jetzt einen dedizierten Hardware-UART. USB-Debug-Ausgaben laufen parallel weiter, ohne das Protokoll zu stören.
 
-Diese Belegung entspricht exakt den Konstanten in [`config.h`](config.h) und stellt sicher, dass jede Komponente am richtigen Controller hängt.
+Diese Belegung entspricht exakt den Konstanten in [`config.h`](config.h) und stellt sicher, dass jede Komponente am richtigen Controller hängt – auch wenn die Pins im Code historisch als `EN_RA/EN_DEC` benannt sind, werden sie inzwischen für Azimut- und Höhenachse genutzt.【F:config.h†L11-L32】
 
 ---
 
@@ -159,8 +161,8 @@ parallel über den integrierten Serial-Port und bleibt störungsfrei.
 
 ```
 NERDSTAR Status
-RA: 05h 34m 31s
-Dec: +22° 00' 52"
+Az: 134.25°
+Alt: +38° 15' 20"
 Align: Yes  Trk: On
 Sel: Messier 042
 Goto: --
@@ -175,10 +177,10 @@ Goto: --
 
 - **Polar Alignment**: eigener Menüpunkt, speichert den Align-Status im EEPROM.
 - **Tracking**: siderisches Tracking nach erfolgreicher Ausrichtung per Knopfdruck.
-- **Goto**: Auswahl im Katalog, Start im Hauptmenü, Abbruch jederzeit über den Joystick.
+- **Goto**: Auswahl im Katalog, manuelle RA/Dec-Koordinaten oder Parkposition, Abbruch jederzeit über den Joystick.
 - **Planeten**: aktuelle Positionen werden aus der RTC-Zeit berechnet – keine statischen Tabellen.
 
-Kurz gesagt: Der ESP32 weiß, wohin es geht, und bleibt dank Tracking dort.
+Kurz gesagt: Der ESP32 weiß, wohin es geht, und bleibt dank Tracking dort.【F:display_menu.cpp†L192-L210】【F:display_menu.cpp†L1287-L1446】
 
 ---
 
@@ -210,9 +212,19 @@ Kurz gesagt: Der ESP32 weiß, wohin es geht, und bleibt dank Tracking dort.
 4. Mikroschritt-Pins setzen: PDN/UART (MS1) & MS2 der TMC2209 per Pull-up auf VIO (1/16 µSteps)
 5. **HID-ESP32-WROOM** flashen (ohne zusätzliche Build-Flags)
 6. **Hauptrechner-ESP32** flashen (Build-Flag `-DDEVICE_ROLE_MAIN` setzen)
-7. UART kreuzen: Main-TX17 ↔ HID-RX16, Main-RX16 ↔ HID-TX17, GND verbinden
-8. Kaffee holen
-9. Freuen, dass du was gebaut hast, das klingt wie ein NASA-Projekt und aussieht wie ein Nerd-Traum.
+7. Optional: WLAN-Zugangsdaten in [`data/eeprom_template.json`](data/eeprom_template.json) eintragen und via Tools flashen
+8. UART kreuzen: Main-TX17 ↔ HID-RX16, Main-RX16 ↔ HID-TX17, GND verbinden
+9. Kaffee holen
+10. Freuen, dass du was gebaut hast, das klingt wie ein NASA-Projekt und aussieht wie ein Nerd-Traum.
+
+---
+
+## 📡 WiFi, OTA & Zeit
+
+- **WiFi OTA**: Über `Setup → WiFi OTA` lässt sich das WLAN pro Gerät aktivieren oder deaktivieren. Das HID-Board meldet den Status direkt im Menü; bei Erfolg werden beide ESP32 für OTA erreichbar gemacht.【F:display_menu.cpp†L205-L218】【F:display_menu.cpp†L724-L737】
+- **NTP & RTC**: Bei aktiver Verbindung synchronisiert sich das System regelmäßig mit NTP-Servern und aktualisiert dabei die lokale Zeit auf HID oder Main Controller.【F:wifi_ota.cpp†L64-L131】
+- **Standort & Zeitzone**: `Setup → Set Location` konfiguriert Breitengrad, Längengrad und Zeitzone (15-Minuten-Schritte). Diese Werte landen im EEPROM und bestimmen die Alt/Az-Berechnungen sowie die Planetenpositionen.【F:display_menu.cpp†L205-L218】【F:display_menu.cpp†L805-L854】【F:display_menu.cpp†L1238-L1284】
+- **Sommerzeit (DST)**: `Setup → Set RTC` enthält einen DST-Schalter (Aus/An/Auto), der zusammen mit der Zeitzone für die Zeitkorrektur genutzt wird.【F:display_menu.cpp†L748-L803】【F:display_menu.cpp†L1587-L1611】
 
 ---
 

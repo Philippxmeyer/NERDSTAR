@@ -12,11 +12,14 @@ Diese Anleitung führt dich Schritt für Schritt durch Inbetriebnahme und Bedien
    - Der komplette Objektkatalog liegt fest im EEPROM. Eine SD-Karte ist nicht mehr erforderlich.
    - Anpassungen erfolgen über [`data/catalog.xml`](../data/catalog.xml); anschließend muss die Firmware neu gebaut werden.
    - Beim Bauen entsteht daraus `catalog_data.inc`, das in die HID-Firmware eingebettet wird. Beim ersten Start schreibt die Firmware den Katalog automatisch in den emulierten EEPROM-Bereich des ESP32 (4 KB Flash). Dort bleibt er auch nach Firmware-Updates erhalten.
-3. **Geräterolle wählen**
+3. **WLAN (optional)**
+   - Zugangsdaten können in [`data/eeprom_template.json`](../data/eeprom_template.json) hinterlegt werden.
+   - Beim Flashen der vorbereiteten EEPROM-Daten stehen die Credentials beiden Controllern für WiFi OTA & NTP zur Verfügung.【F:data/eeprom_template.json†L1-L6】
+4. **Geräterolle wählen**
    - In [`role_config.h`](../role_config.h) wird gesteuert, welche Variante kompiliert wird. Standardmäßig ist `DEVICE_ROLE_HID` aktiv.
    - Für das Hauptsteuerungs-Board beim Kompilieren den Define `DEVICE_ROLE_MAIN` setzen (z. B. `arduino-cli compile --build-property build.extra_flags=-DDEVICE_ROLE_MAIN`). Alternativ kann der Define temporär vor dem `#include "role_config.h"` in `NERDSTAR.ino` ergänzt werden.
    - Nach dem Flashen der Main-Firmware wieder den HID-Build ohne zusätzliche Defines kompilieren, um die HID-Einheit zu aktualisieren.
-4. **Verdrahtung gemäß Pinbelegung**
+5. **Verdrahtung gemäß Pinbelegung**
    - **ESP32 (Hauptrechner)** → Steppertreiber
      - RA-Treiber: STEP 25, DIR 26, EN 27
      - DEC-Treiber: STEP 13, DIR 12, EN 14
@@ -30,7 +33,7 @@ Diese Anleitung führt dich Schritt für Schritt durch Inbetriebnahme und Bedien
      - Main-TX (17) → HID-RX (16), Main-RX (16) ← HID-TX (17)
      - Gemeinsame Masse verbinden (GND ↔ GND)
      - Hinweis: Der Link nutzt einen dedizierten Hardware-UART. USB-Debug-Ausgaben bleiben unabhängig.
-5. **Firmware flashen**
+6. **Firmware flashen**
    - Bibliotheken installieren (`Adafruit_SSD1306`, `Adafruit_GFX`, `RTClib`)
    - Sketch `NERDSTAR.ino` mit den neuen Modulen kompilieren und auf die Boards flashen (HID & Main: Board `ESP32 Dev Module`).
    - USB-Seriell (115200 Baud) zeigt beim Booten Statusmeldungen beider Controller.
@@ -44,7 +47,7 @@ Diese Anleitung führt dich Schritt für Schritt durch Inbetriebnahme und Bedien
    - Der Mittelpunkt wird im EEPROM gespeichert und kann jederzeit über das Setup-Menü neu gesetzt werden.
 3. **Achsen kalibrieren (optional, empfohlen)**
    - Über `Setup → Cal Axes` lässt sich die Schrittauflösung exakt einstellen.
-   - Schritte siehe Abschnitt 5.
+   - Schritte siehe Abschnitt 5.4.
 4. **RTC-Uhrzeit prüfen**
    - Falls die RTC noch nicht gesetzt ist, `Setup → Set RTC` wählen.
 
@@ -59,12 +62,14 @@ Diese Anleitung führt dich Schritt für Schritt durch Inbetriebnahme und Bedien
 
 | Menüpunkt        | Funktion                                                                                   |
 | ---------------- | ------------------------------------------------------------------------------------------- |
-| Status           | Zeigt RA/Dec, Align-/Tracking-Status, gewähltes Ziel sowie Joystick- und Linkdiagnose       |
+| Status           | Zeigt Az/Alt, Align-/Tracking-Status, gewähltes Ziel sowie Diagnosewerte an.【F:display_menu.cpp†L565-L610】 |
 | Polar Align      | Führt durch die Polaris-Ausrichtung. Encoder drücken = bestätigen, Joystick drücken = Abbruch |
 | Start Tracking   | Aktiviert siderische Nachführung (nur nach erfolgreicher Ausrichtung)                       |
 | Stop Tracking    | Stoppt die Nachführung                                                                      |
 | Catalog          | Erst Kategorie wählen (z.B. Planet/Stern), dann Objekt blättern; Encoder = Goto, Joystick = zurück zur Kategorie |
 | Goto Selected    | Startet die automatische Bewegung zum zuletzt gemerkten Objekt (siehe Abschnitt 6)          |
+| Goto RA/Dec      | Manuelle Zielkoordinaten eingeben und direkt anfahren (siehe Abschnitt 6).【F:display_menu.cpp†L1287-L1446】 |
+| Park             | Fährt die Höhe sicher auf das obere Limit und stoppt die Bewegung.【F:display_menu.cpp†L2045-L2086】 |
 | Setup            | Öffnet das Setup-Menü                                                                       |
 
 ## 5. Setup-Menü
@@ -72,15 +77,21 @@ Diese Anleitung führt dich Schritt für Schritt durch Inbetriebnahme und Bedien
 ### 5.1 RTC einstellen
 1. `Setup → Set RTC` wählen.
 2. Encoder drehen verändert den jeweils markierten Wert (Jahr → Monat → … → Sekunde).
-3. Joystick drücken springt zum nächsten Feld.
-4. Encoder drücken speichert die Zeit (RTC und EEPROM).
+3. Joystick drücken springt zum nächsten Feld (inklusive DST-Auswahl „Off/On/Auto“).【F:display_menu.cpp†L748-L803】
+4. Encoder drücken speichert Zeit & DST-Modus im RTC/EEPROM.【F:display_menu.cpp†L1587-L1611】
 
-### 5.2 Joystick kalibrieren
+### 5.2 Standort setzen
+1. `Setup → Set Location` aufrufen.
+2. Encoder drehen passt Breitengrad, Längengrad (in 0,1°) sowie die Zeitzone (15-Minuten-Schritte) an.【F:display_menu.cpp†L805-L854】
+3. Joystick drücken wechselt zum nächsten Feld, inklusive „Save/Back“.
+4. Encoder drücken bestätigt; „Save“ schreibt die Werte dauerhaft in den EEPROM.【F:display_menu.cpp†L1238-L1284】
+
+### 5.3 Joystick kalibrieren
 1. `Setup → Cal Joystick` wählt den Kalibriermodus.
 2. Den Joystick loslassen, damit er mittig steht.
 3. Nach ca. einer Sekunde werden neue Mittelwerte angezeigt und gespeichert.
 
-### 5.3 Achsen kalibrieren
+### 5.4 Achsen kalibrieren
 1. `Setup → Cal Axes` starten. Die Anzeige führt durch vier Schritte:
    - **Set Az 0deg**: Teleskop in Richtung geografischer Norden (Azimut 0°) stellen, Encoder drücken.
    - **Rotate +90deg**: Mit Joystick/Encoder exakt 90° nach Osten drehen, Encoder drücken.
@@ -89,18 +100,27 @@ Diese Anleitung führt dich Schritt für Schritt durch Inbetriebnahme und Bedien
 2. Die Software berechnet Schritte pro Grad für Azimut und Höhe, setzt Nullpunkte und speichert alles im EEPROM.
 3. Bei inkonsistenten Werten erscheint "Cal failed" – Vorgang ggf. wiederholen.
 
-### 5.4 Goto-Geschwindigkeit einstellen
-1. `Setup → Goto Speed` öffnet die Parameter für Maximalgeschwindigkeit, Beschleunigung und Abbremsen (jeweils in °/s bzw. °/s²).
-2. Mit dem Encoder den markierten Wert ändern, Joystick drücken wechselt zum nächsten Feld.
-3. Encoder drücken speichert das Profil dauerhaft. Angepasste Werte wirken auf beide Achsen.
+### 5.5 Goto-Geschwindigkeit einstellen
+1. `Setup → Goto Speed` öffnet die Parameter für Maximalgeschwindigkeit, Beschleunigung und Abbremsen (jeweils in °/s bzw. °/s²).【F:display_menu.cpp†L1051-L1079】
+2. Mit dem Encoder den markierten Wert ändern, Joystick drücken wechselt zum nächsten Feld.【F:display_menu.cpp†L1182-L1218】
+3. Encoder drücken speichert das Profil dauerhaft. Angepasste Werte wirken auf beide Achsen.【F:display_menu.cpp†L1219-L1234】
 
-### 5.5 Umkehrspiel (Backlash) kalibrieren
+### 5.6 Pan-Geschwindigkeit einstellen
+1. `Setup → Pan Speed` bearbeiten, um Joystick-Fahrten anzupassen (Aufbau wie `Goto Speed`).【F:display_menu.cpp†L1171-L1179】【F:display_menu.cpp†L1051-L1079】
+2. Werte gelten für manuelles Slewen beider Achsen.【F:display_menu.cpp†L1182-L1234】
+
+### 5.7 Umkehrspiel (Backlash) kalibrieren
 1. `Setup → Cal Backlash` starten. Die Anzeige führt durch die vier Messpunkte:
    - **Az fwd pos**: Objekt mit Joystick in Vorwärtsrichtung anfahren, Encoder drücken.
    - **Az reverse**: Richtung wechseln bis Spiel aufgehoben ist, Encoder drücken.
    - **Alt fwd pos** / **Alt reverse**: Gleiches Verfahren für die Höhenachse.
 2. Zwischendurch den Joystick für die Bewegung nutzen, Joystick-Taste bricht den Vorgang ab.
 3. Nach Abschluss werden die ermittelten Schrittwerte gespeichert und automatisch in der Goto-Steuerung berücksichtigt.
+
+### 5.8 WiFi OTA
+1. `Setup → WiFi OTA` zeigt den aktuellen Status (`NoCfg`, `Off`, `Conn`, `On`).【F:display_menu.cpp†L724-L737】
+2. Encoder drücken schaltet WLAN für beide ESP32 um, sofern Credentials vorhanden sind. Bei Erfolg erscheinen SSID oder Fehlerhinweise.【F:display_menu.cpp†L2248-L2281】
+3. Aktives WLAN ermöglicht OTA-Updates und wiederholte NTP-Synchronisation der Systemzeit.【F:wifi_ota.cpp†L64-L149】
 
 ## 6. Katalog und Goto
 
@@ -112,6 +132,8 @@ Diese Anleitung führt dich Schritt für Schritt durch Inbetriebnahme und Bedien
 6. Nach Abschluss erscheinen "Goto done" und die Nachführung wird automatisch mit dem Ziel als Referenz aktiviert.
 7. Im Hauptmenü kann `Goto Selected` genutzt werden, um das zuletzt gewählte Objekt erneut anzufahren.
 
+**Manuelles Goto**: Über `Goto RA/Dec` lassen sich Koordinaten (RA hh:mm:ss, Dec ±dd:mm:ss) direkt eingeben. Der Joystick wechselt das Feld, der Encoder verändert die Werte. Nach Bestätigung fährt der Controller die eingegebene Position an.【F:display_menu.cpp†L1287-L1446】
+
 **Planeten**: Für Objekte mit Typ `Planet` wird die RA/Dec über die eingebaute Planetenberechnung (basierend auf Julianischem Datum) bestimmt. Voraussetzung: RTC läuft.
 
 ## 7. Polaris-Ausrichtung und Tracking
@@ -120,6 +142,8 @@ Diese Anleitung führt dich Schritt für Schritt durch Inbetriebnahme und Bedien
 2. Encoder drücken → Referenzwerte werden gesetzt und gespeichert.
 3. Nach erfolgreichem Align `Start Tracking` aktivieren.
 4. Während laufender Nachführung darf der Joystick jederzeit zur Feinjustage bewegt werden. Sobald der Joystick losgelassen wird, übernimmt das System den neuen Versatz und führt den zuletzt angefahrenen Punkt automatisch nach.
+
+**Parken**: Der Menüpunkt `Park` fährt die Höhenachse zur sicheren Maximalposition und stoppt anschließend alle Bewegungen – ideal für Transport oder Abschaltung.【F:display_menu.cpp†L2045-L2086】
 
 ## 8. Sicherheit & Tipps
 
