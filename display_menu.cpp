@@ -223,6 +223,7 @@ int catalogTypeObjectIndex = 0;
 int catalogIndex = 0;
 int catalogItemScroll = 0;
 int catalogDetailMenuIndex = 0;
+bool catalogDetailSelectingAction = false;
 constexpr int kCatalogDetailMenuCount = 2;
 
 String infoMessage;
@@ -683,12 +684,10 @@ void drawMainMenu() {
   if (visible <= 0) {
     return;
   }
-  ensureSelectionVisible(mainMenuScroll, mainMenuIndex, visible, kMainMenuCount);
-  for (int row = 0; row < visible; ++row) {
-    int index = mainMenuScroll + row;
-    if (index >= static_cast<int>(kMainMenuCount)) {
-      break;
-    }
+  int start = std::clamp(mainMenuScroll, 0, static_cast<int>(kMainMenuCount) - 1);
+  int rows = std::min(visible, static_cast<int>(kMainMenuCount));
+  for (int row = 0; row < rows; ++row) {
+    int index = (start + row) % static_cast<int>(kMainMenuCount);
     int y = lineY(0, row);
     bool selected = index == mainMenuIndex;
     if (selected) {
@@ -714,12 +713,10 @@ void drawSetupMenu() {
   if (visible <= 0) {
     return;
   }
-  ensureSelectionVisible(setupMenuScroll, setupMenuIndex, visible, kSetupMenuCount);
-  for (int row = 0; row < visible; ++row) {
-    int index = setupMenuScroll + row;
-    if (index >= static_cast<int>(kSetupMenuCount)) {
-      break;
-    }
+  int start = std::clamp(setupMenuScroll, 0, static_cast<int>(kSetupMenuCount) - 1);
+  int rows = std::min(visible, static_cast<int>(kSetupMenuCount));
+  for (int row = 0; row < rows; ++row) {
+    int index = (start + row) % static_cast<int>(kSetupMenuCount);
     int y = lineY(kListTop, row);
     bool selected = index == setupMenuIndex;
     if (selected) {
@@ -977,6 +974,9 @@ void drawCatalogItemDetail() {
     return;
   }
 
+  systemState.selectedCatalogIndex = catalogIndex;
+  systemState.selectedCatalogTypeIndex = catalogTypeIndex;
+
   display.setCursor(0, 10);
   display.print(summary.name);
   display.setCursor(90, 10);
@@ -1023,10 +1023,19 @@ void drawCatalogItemDetail() {
     int x = (config::OLED_WIDTH / kCatalogDetailMenuCount) * i;
     int width = (i == kCatalogDetailMenuCount - 1) ? (config::OLED_WIDTH - x)
                                                    : (config::OLED_WIDTH / kCatalogDetailMenuCount);
-    display.fillRect(x, menuY, width, kLineHeight, selected ? SSD1306_WHITE : SSD1306_BLACK);
-    display.setTextColor(selected ? SSD1306_BLACK : SSD1306_WHITE);
+    display.fillRect(x, menuY, width, kLineHeight, SSD1306_BLACK);
+    if (catalogDetailSelectingAction && selected) {
+      display.fillRect(x, menuY, width, kLineHeight, SSD1306_WHITE);
+      display.setTextColor(SSD1306_BLACK);
+    } else {
+      display.drawRect(x, menuY, width, kLineHeight, SSD1306_WHITE);
+      display.setTextColor(SSD1306_WHITE);
+    }
     display.setCursor(x + 2, menuY);
     display.print(labels[i]);
+    if (catalogDetailSelectingAction && selected) {
+      display.setTextColor(SSD1306_WHITE);
+    }
   }
   display.setTextColor(SSD1306_WHITE);
 }
@@ -2106,7 +2115,9 @@ void handleMainMenuInput(int delta) {
   if (delta != 0) {
     mainMenuIndex += delta;
     while (mainMenuIndex < 0) mainMenuIndex += static_cast<int>(kMainMenuCount);
-    while (mainMenuIndex >= static_cast<int>(kMainMenuCount)) mainMenuIndex -= static_cast<int>(kMainMenuCount);
+    while (mainMenuIndex >= static_cast<int>(kMainMenuCount))
+      mainMenuIndex -= static_cast<int>(kMainMenuCount);
+    mainMenuScroll = mainMenuIndex;
   }
   if (input::consumeJoystickPress()) {
     systemState.menuMode = MenuMode::Status;
@@ -2229,6 +2240,7 @@ void handleSetupMenuInput(int delta) {
     while (setupMenuIndex < 0) setupMenuIndex += static_cast<int>(kSetupMenuCount);
     while (setupMenuIndex >= static_cast<int>(kSetupMenuCount))
       setupMenuIndex -= static_cast<int>(kSetupMenuCount);
+    setupMenuScroll = setupMenuIndex;
   }
   if (input::consumeJoystickPress()) {
     setUiState(UiState::MainMenu);
@@ -2439,6 +2451,7 @@ void handleCatalogItemListInput(int delta) {
 
   if (input::consumeEncoderClick()) {
     catalogDetailMenuIndex = 0;
+    catalogDetailSelectingAction = false;
     systemState.selectedCatalogTypeIndex = catalogTypeIndex;
     setUiState(UiState::CatalogItemDetail);
     return;
@@ -2451,6 +2464,7 @@ void handleCatalogItemListInput(int delta) {
 
 void handleCatalogItemDetailInput(int delta) {
   if (catalog::size() == 0 || catalog::typeGroupCount() == 0) {
+    catalogDetailSelectingAction = false;
     setUiState(UiState::CatalogTypeBrowser);
     return;
   }
@@ -2459,18 +2473,34 @@ void handleCatalogItemDetailInput(int delta) {
   if (!catalog::getTypeSummary(static_cast<size_t>(catalogTypeIndex), summary) ||
       summary.objectCount == 0) {
     showInfo("Empty type");
+    catalogDetailSelectingAction = false;
     setUiState(UiState::CatalogTypeBrowser);
     return;
   }
 
-  if (catalogTypeObjectIndex < 0 || catalogTypeObjectIndex >= static_cast<int>(summary.objectCount)) {
-    catalogTypeObjectIndex = 0;
+  int total = static_cast<int>(summary.objectCount);
+  if (catalogTypeObjectIndex < 0 || catalogTypeObjectIndex >= total) {
+    catalogTypeObjectIndex = ((catalogTypeObjectIndex % total) + total) % total;
+  }
+
+  if (delta != 0) {
+    if (catalogDetailSelectingAction) {
+      catalogDetailMenuIndex += delta;
+      while (catalogDetailMenuIndex < 0) catalogDetailMenuIndex += kCatalogDetailMenuCount;
+      while (catalogDetailMenuIndex >= kCatalogDetailMenuCount)
+        catalogDetailMenuIndex -= kCatalogDetailMenuCount;
+    } else {
+      catalogTypeObjectIndex += delta;
+      while (catalogTypeObjectIndex < 0) catalogTypeObjectIndex += total;
+      while (catalogTypeObjectIndex >= total) catalogTypeObjectIndex -= total;
+    }
   }
 
   size_t globalIndex = 0;
   if (!catalog::getTypeObjectIndex(static_cast<size_t>(catalogTypeIndex),
                                    static_cast<size_t>(catalogTypeObjectIndex), globalIndex)) {
     showInfo("Invalid entry");
+    catalogDetailSelectingAction = false;
     setUiState(UiState::CatalogTypeBrowser);
     return;
   }
@@ -2479,29 +2509,34 @@ void handleCatalogItemDetailInput(int delta) {
   if (catalogDetailMenuIndex < 0 || catalogDetailMenuIndex >= kCatalogDetailMenuCount) {
     catalogDetailMenuIndex = 0;
   }
-  if (delta != 0) {
-    catalogDetailMenuIndex += delta;
-    while (catalogDetailMenuIndex < 0) catalogDetailMenuIndex += kCatalogDetailMenuCount;
-    while (catalogDetailMenuIndex >= kCatalogDetailMenuCount) catalogDetailMenuIndex -= kCatalogDetailMenuCount;
-  }
 
   if (input::consumeEncoderClick()) {
+    if (!catalogDetailSelectingAction) {
+      catalogDetailSelectingAction = true;
+      catalogDetailMenuIndex = 0;
+      return;
+    }
+
     if (catalogDetailMenuIndex == 0) {
-      systemState.selectedCatalogIndex = catalogIndex;
-      systemState.selectedCatalogTypeIndex = catalogTypeIndex;
       const CatalogObject* object = catalog::get(globalIndex);
       if (object && startGotoToObject(*object, catalogIndex)) {
         selectedObjectName = sanitizeForDisplay(object->name);
         gotoTargetName = sanitizeForDisplay(object->name);
       }
+      catalogDetailSelectingAction = false;
     } else {
+      catalogDetailSelectingAction = false;
       setUiState(UiState::CatalogItemList);
       return;
     }
   }
 
   if (input::consumeJoystickPress()) {
-    setUiState(UiState::CatalogItemList);
+    if (catalogDetailSelectingAction) {
+      catalogDetailSelectingAction = false;
+    } else {
+      setUiState(UiState::CatalogItemList);
+    }
   }
 }
 
