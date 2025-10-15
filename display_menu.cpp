@@ -11,6 +11,9 @@
 #include <stdlib.h>
 #include <limits.h>
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+
 #include "catalog.h"
 #include "comm.h"
 #include "config.h"
@@ -29,6 +32,8 @@ namespace {
 Adafruit_SSD1306 display(config::OLED_WIDTH, config::OLED_HEIGHT, &Wire, -1);
 RTC_DS3231 rtc;
 bool rtcAvailable = false;
+SemaphoreHandle_t i2cMutex = nullptr;
+StaticSemaphore_t i2cMutexBuffer;
 
 constexpr int kLineHeight = 8;
 
@@ -230,6 +235,29 @@ String infoMessage;
 uint32_t infoUntil = 0;
 portMUX_TYPE displayMux = portMUX_INITIALIZER_UNLOCKED;
 
+class MutexLock {
+ public:
+  explicit MutexLock(SemaphoreHandle_t handle) : handle_(handle), locked_(false) {
+    if (!handle_) {
+      locked_ = true;
+      return;
+    }
+    locked_ = xSemaphoreTakeRecursive(handle_, portMAX_DELAY) == pdTRUE;
+  }
+
+  ~MutexLock() {
+    if (locked_ && handle_) {
+      xSemaphoreGiveRecursive(handle_);
+    }
+  }
+
+  bool locked() const { return locked_; }
+
+ private:
+  SemaphoreHandle_t handle_;
+  bool locked_;
+};
+
 void setUiState(UiState state) {
   uiState = state;
 }
@@ -425,8 +453,11 @@ double applyAtmosphericRefraction(double geometricAltitudeDeg) {
 DateTime currentDateTime() {
   const SystemConfig& config = storage::getConfig();
   if (rtcAvailable) {
-    time_t utcEpoch = rtc.now().unixtime();
-    return time_utils::applyTimezone(utcEpoch);
+    MutexLock lock(i2cMutex);
+    if (lock.locked()) {
+      time_t utcEpoch = rtc.now().unixtime();
+      return time_utils::applyTimezone(utcEpoch);
+    }
   }
   if (config.lastRtcEpoch != 0) {
     return time_utils::applyTimezone(static_cast<time_t>(config.lastRtcEpoch));
@@ -1505,6 +1536,11 @@ void handleBacklashCalibrationInput() {
 }
 
 void render() {
+  MutexLock lock(i2cMutex);
+  if (!lock.locked()) {
+    return;
+  }
+
   display.clearDisplay();
 
   bool showHeader = uiState != UiState::MainMenu;
@@ -1593,8 +1629,15 @@ void enterRtcEditor() {
   DateTime now;
   const SystemConfig& config = storage::getConfig();
   if (rtcAvailable) {
-    time_t utcEpoch = rtc.now().unixtime();
-    now = time_utils::applyTimezone(utcEpoch);
+    MutexLock lock(i2cMutex);
+    if (lock.locked()) {
+      time_t utcEpoch = rtc.now().unixtime();
+      now = time_utils::applyTimezone(utcEpoch);
+    } else if (config.lastRtcEpoch != 0) {
+      now = time_utils::applyTimezone(static_cast<time_t>(config.lastRtcEpoch));
+    } else {
+      now = DateTime(2024, 1, 1, 0, 0, 0);
+    }
   } else if (config.lastRtcEpoch != 0) {
     now = time_utils::applyTimezone(static_cast<time_t>(config.lastRtcEpoch));
   } else {
@@ -1611,7 +1654,10 @@ void applyRtcEdit() {
   DateTime updated(rtcEdit.year, rtcEdit.month, rtcEdit.day, rtcEdit.hour, rtcEdit.minute, rtcEdit.second);
   time_t utcEpoch = time_utils::toUtcEpoch(updated);
   if (rtcAvailable) {
-    rtc.adjust(DateTime(utcEpoch));
+    MutexLock lock(i2cMutex);
+    if (lock.locked()) {
+      rtc.adjust(DateTime(utcEpoch));
+    }
   }
   storage::setDstMode(rtcEdit.dstMode);
   storage::setRtcEpoch(static_cast<uint32_t>(utcEpoch));
@@ -2556,7 +2602,10 @@ void handlePolarAlignInput() {
 
 void applyNetworkTime(time_t utcEpoch) {
   if (rtcAvailable) {
-    rtc.adjust(DateTime(utcEpoch));
+    MutexLock lock(i2cMutex);
+    if (lock.locked()) {
+      rtc.adjust(DateTime(utcEpoch));
+    }
   }
   storage::setRtcEpoch(static_cast<uint32_t>(utcEpoch));
 }
@@ -2570,23 +2619,41 @@ void stopTracking() {
 }
 
 void init() {
-  Wire.begin(config::SDA_PIN, config::SCL_PIN);
-  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-    // OLED init failure will be reported via on-screen message; avoid serial
-    // output because the primary UART is reserved for the inter-board link.
+  if (i2cMutex == nullptr) {
+    i2cMutex = xSemaphoreCreateRecursiveMutexStatic(&i2cMutexBuffer);
   }
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.clearDisplay();
-  display.display();
 
-  rtcAvailable = rtc.begin();
+  Wire.begin(config::SDA_PIN, config::SCL_PIN);
+
+  auto initPeripherals = [&]() {
+    if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+      // OLED init failure will be reported via on-screen message; avoid serial
+      // output because the primary UART is reserved for the inter-board link.
+    }
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.clearDisplay();
+    display.display();
+
+    rtcAvailable = rtc.begin();
+  };
+
+  {
+    MutexLock lock(i2cMutex);
+    (void)lock;
+    initPeripherals();
+  }
+
   if (!rtcAvailable) {
     showInfo("RTC missing", 2000);
   }
 }
 
 void showBootMessage() {
+  MutexLock lock(i2cMutex);
+  if (!lock.locked()) {
+    return;
+  }
   display.clearDisplay();
   display.setCursor(0, 0);
   display.print("NERDSTAR booting...");
@@ -2594,6 +2661,10 @@ void showBootMessage() {
 }
 
 void showCalibrationStart() {
+  MutexLock lock(i2cMutex);
+  if (!lock.locked()) {
+    return;
+  }
   display.clearDisplay();
   display.setCursor(0, 0);
   display.print("Calibrating joystick");
@@ -2601,18 +2672,28 @@ void showCalibrationStart() {
 }
 
 void showCalibrationResult(int centerX, int centerY) {
-  display.clearDisplay();
-  display.setCursor(0, 0);
-  display.print("Calibration done");
-  display.setCursor(0, 16);
-  display.printf("CX=%d", centerX);
-  display.setCursor(0, 24);
-  display.printf("CY=%d", centerY);
-  display.display();
+  {
+    MutexLock lock(i2cMutex);
+    if (!lock.locked()) {
+      return;
+    }
+    display.clearDisplay();
+    display.setCursor(0, 0);
+    display.print("Calibration done");
+    display.setCursor(0, 16);
+    display.printf("CX=%d", centerX);
+    display.setCursor(0, 24);
+    display.printf("CY=%d", centerY);
+    display.display();
+  }
   delay(1000);
 }
 
 void showReady() {
+  MutexLock lock(i2cMutex);
+  if (!lock.locked()) {
+    return;
+  }
   display.clearDisplay();
   display.setCursor(0, 0);
   display.print("NERDSTAR ready");
