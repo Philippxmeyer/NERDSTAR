@@ -27,7 +27,10 @@
 #include "wifi_ota.h"
 
 namespace display_menu {
-namespace {
+
+void applyOrientationState(bool known);
+
+namespace {  
 
 Adafruit_SSD1306 display(config::OLED_WIDTH, config::OLED_HEIGHT, &Wire, -1);
 RTC_DS3231 rtc;
@@ -272,7 +275,6 @@ void setUiState(UiState state) {
 void abortGoto();
 bool startGotoToCoordinates(double raHours, double decDegrees, const String& label);
 bool startParkPosition();
-void applyOrientationState(bool known);
 void drawStartupLockPrompt();
 void handleStartupLockPromptInput(int delta);
 
