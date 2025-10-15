@@ -21,8 +21,6 @@ struct SystemConfig {
   bool polarAligned;
   uint32_t lastRtcEpoch;
   GotoProfile panningProfile;
-  char wifiSsid[33];
-  char wifiPassword[65];
 };
 
 namespace storage {
@@ -49,10 +47,6 @@ void setPolarAligned(bool aligned);
 void setRtcEpoch(uint32_t epoch);
 void setObserverLocation(double latitudeDeg, double longitudeDeg, int32_t timezoneMinutes);
 void setDstMode(DstMode mode);
-bool hasWifiCredentials();
-void setWifiCredentials(const char* ssid, const char* password);
-const char* wifiSsid();
-const char* wifiPassword();
 void save();
 size_t getCatalogEntryCount();
 bool readCatalogEntry(size_t index, CatalogEntry& entry);

@@ -11,6 +11,9 @@
 #include <stdlib.h>
 #include <limits.h>
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+
 #include "catalog.h"
 #include "comm.h"
 #include "config.h"
@@ -29,6 +32,8 @@ namespace {
 Adafruit_SSD1306 display(config::OLED_WIDTH, config::OLED_HEIGHT, &Wire, -1);
 RTC_DS3231 rtc;
 bool rtcAvailable = false;
+SemaphoreHandle_t i2cMutex = nullptr;
+StaticSemaphore_t i2cMutexBuffer;
 
 constexpr int kLineHeight = 8;
 
@@ -65,6 +70,7 @@ struct RtcEditState {
 };
 
 RtcEditState rtcEdit{2024, 1, 1, 0, 0, 0, DstMode::Auto, 0, 0};
+int rtcEditScroll = 0;
 constexpr int kRtcFieldCount = 8;
 
 struct AxisCalibrationState {
@@ -222,11 +228,35 @@ int catalogTypeObjectIndex = 0;
 int catalogIndex = 0;
 int catalogItemScroll = 0;
 int catalogDetailMenuIndex = 0;
+bool catalogDetailSelectingAction = false;
 constexpr int kCatalogDetailMenuCount = 2;
 
 String infoMessage;
 uint32_t infoUntil = 0;
 portMUX_TYPE displayMux = portMUX_INITIALIZER_UNLOCKED;
+
+class MutexLock {
+ public:
+  explicit MutexLock(SemaphoreHandle_t handle) : handle_(handle), locked_(false) {
+    if (!handle_) {
+      locked_ = true;
+      return;
+    }
+    locked_ = xSemaphoreTakeRecursive(handle_, portMAX_DELAY) == pdTRUE;
+  }
+
+  ~MutexLock() {
+    if (locked_ && handle_) {
+      xSemaphoreGiveRecursive(handle_);
+    }
+  }
+
+  bool locked() const { return locked_; }
+
+ private:
+  SemaphoreHandle_t handle_;
+  bool locked_;
+};
 
 void setUiState(UiState state) {
   uiState = state;
@@ -241,7 +271,8 @@ void drawHeader() {
   display.setCursor(0, 0);
   display.print("NERDSTAR");
   if (rtcAvailable) {
-    DateTime now = rtc.now();
+    time_t utcEpoch = rtc.now().unixtime();
+    DateTime now = time_utils::applyTimezone(utcEpoch);
     char buffer[20];
     snprintf(buffer, sizeof(buffer), "%02d:%02d:%02d", now.hour(), now.minute(), now.second());
     int16_t x1, y1;
@@ -420,11 +451,16 @@ double applyAtmosphericRefraction(double geometricAltitudeDeg) {
 }
 
 DateTime currentDateTime() {
+  const SystemConfig& config = storage::getConfig();
   if (rtcAvailable) {
-    return rtc.now();
+    MutexLock lock(i2cMutex);
+    if (lock.locked()) {
+      time_t utcEpoch = rtc.now().unixtime();
+      return time_utils::applyTimezone(utcEpoch);
+    }
   }
-  if (storage::getConfig().lastRtcEpoch != 0) {
-    return DateTime(storage::getConfig().lastRtcEpoch);
+  if (config.lastRtcEpoch != 0) {
+    return time_utils::applyTimezone(static_cast<time_t>(config.lastRtcEpoch));
   }
   return DateTime(2024, 1, 1, 0, 0, 0);
 }
@@ -679,12 +715,10 @@ void drawMainMenu() {
   if (visible <= 0) {
     return;
   }
-  ensureSelectionVisible(mainMenuScroll, mainMenuIndex, visible, kMainMenuCount);
-  for (int row = 0; row < visible; ++row) {
-    int index = mainMenuScroll + row;
-    if (index >= static_cast<int>(kMainMenuCount)) {
-      break;
-    }
+  int start = std::clamp(mainMenuScroll, 0, static_cast<int>(kMainMenuCount) - 1);
+  int rows = std::min(visible, static_cast<int>(kMainMenuCount));
+  for (int row = 0; row < rows; ++row) {
+    int index = (start + row) % static_cast<int>(kMainMenuCount);
     int y = lineY(0, row);
     bool selected = index == mainMenuIndex;
     if (selected) {
@@ -710,12 +744,10 @@ void drawSetupMenu() {
   if (visible <= 0) {
     return;
   }
-  ensureSelectionVisible(setupMenuScroll, setupMenuIndex, visible, kSetupMenuCount);
-  for (int row = 0; row < visible; ++row) {
-    int index = setupMenuScroll + row;
-    if (index >= static_cast<int>(kSetupMenuCount)) {
-      break;
-    }
+  int start = std::clamp(setupMenuScroll, 0, static_cast<int>(kSetupMenuCount) - 1);
+  int rows = std::min(visible, static_cast<int>(kSetupMenuCount));
+  for (int row = 0; row < rows; ++row) {
+    int index = (start + row) % static_cast<int>(kSetupMenuCount);
     int y = lineY(kListTop, row);
     bool selected = index == setupMenuIndex;
     if (selected) {
@@ -748,57 +780,49 @@ void drawSetupMenu() {
 void drawRtcEditor() {
   display.setCursor(0, 12);
   display.print("RTC Setup");
-  int y = 24;
+  constexpr int kListTop = 20;
+  constexpr int kFooterHeight = kLineHeight;
+  int visibleRows = computeVisibleRows(kListTop, kFooterHeight);
+  if (visibleRows <= 0) {
+    return;
+  }
+  ensureSelectionVisible(rtcEditScroll, rtcEdit.fieldIndex, visibleRows, kRtcFieldCount);
+
   const char* labels[] = {"Year", "Month", "Day", "Hour", "Min", "Sec"};
   int values[] = {rtcEdit.year, rtcEdit.month, rtcEdit.day,
                   rtcEdit.hour, rtcEdit.minute, rtcEdit.second};
-  for (int i = 0; i < 6; ++i) {
-    bool selected = rtcEdit.fieldIndex == i;
+  const char* dstLabels[] = {"Off", "On", "Auto"};
+
+  for (int row = 0; row < visibleRows; ++row) {
+    int index = rtcEditScroll + row;
+    if (index >= kRtcFieldCount) {
+      break;
+    }
+    int y = lineY(kListTop, row);
+    bool selected = index == rtcEdit.fieldIndex;
     if (selected) {
-      display.fillRect(0, y, config::OLED_WIDTH, 8, SSD1306_WHITE);
+      display.fillRect(0, y, config::OLED_WIDTH, kLineHeight, SSD1306_WHITE);
       display.setTextColor(SSD1306_BLACK);
     } else {
       display.setTextColor(SSD1306_WHITE);
     }
     display.setCursor(0, y);
-    display.printf("%s: %02d", labels[i], values[i]);
+    if (index < 6) {
+      display.printf("%s: %02d", labels[index], values[index]);
+    } else if (index == 6) {
+      int dstIndex = std::clamp(static_cast<int>(rtcEdit.dstMode), 0, 2);
+      display.printf("DST: %s", dstLabels[dstIndex]);
+    } else {
+      display.print(rtcEdit.actionIndex == 0 ? "Save" : "Back");
+    }
     if (selected) {
       display.setTextColor(SSD1306_WHITE);
     }
-    y += 8;
   }
 
-  const char* dstLabels[] = {"Off", "On", "Auto"};
-  int dstIndex = static_cast<int>(rtcEdit.dstMode);
-  dstIndex = std::clamp(dstIndex, 0, 2);
-  bool dstSelected = rtcEdit.fieldIndex == 6;
-  if (dstSelected) {
-    display.fillRect(0, y, config::OLED_WIDTH, 8, SSD1306_WHITE);
-    display.setTextColor(SSD1306_BLACK);
-  } else {
-    display.setTextColor(SSD1306_WHITE);
-  }
-  display.setCursor(0, y);
-  display.printf("DST: %s", dstLabels[dstIndex]);
-  if (dstSelected) {
-    display.setTextColor(SSD1306_WHITE);
-  }
-  y += 8;
-
-  bool actionSelected = rtcEdit.fieldIndex == kRtcFieldCount - 1;
-  if (actionSelected) {
-    display.fillRect(0, y, config::OLED_WIDTH, 8, SSD1306_WHITE);
-    display.setTextColor(SSD1306_BLACK);
-  } else {
-    display.setTextColor(SSD1306_WHITE);
-  }
-  display.setCursor(0, y);
-  display.print(rtcEdit.actionIndex == 0 ? "Save" : "Back");
-  if (actionSelected) {
-    display.setTextColor(SSD1306_WHITE);
-  }
-
-  display.setCursor(0, 60);
+  int footerY = config::OLED_HEIGHT - kFooterHeight;
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, footerY);
   display.print("Enc=Next/Conf Joy=Cancel");
 }
 
@@ -981,6 +1005,9 @@ void drawCatalogItemDetail() {
     return;
   }
 
+  systemState.selectedCatalogIndex = catalogIndex;
+  systemState.selectedCatalogTypeIndex = catalogTypeIndex;
+
   display.setCursor(0, 10);
   display.print(summary.name);
   display.setCursor(90, 10);
@@ -1027,10 +1054,19 @@ void drawCatalogItemDetail() {
     int x = (config::OLED_WIDTH / kCatalogDetailMenuCount) * i;
     int width = (i == kCatalogDetailMenuCount - 1) ? (config::OLED_WIDTH - x)
                                                    : (config::OLED_WIDTH / kCatalogDetailMenuCount);
-    display.fillRect(x, menuY, width, kLineHeight, selected ? SSD1306_WHITE : SSD1306_BLACK);
-    display.setTextColor(selected ? SSD1306_BLACK : SSD1306_WHITE);
+    display.fillRect(x, menuY, width, kLineHeight, SSD1306_BLACK);
+    if (catalogDetailSelectingAction && selected) {
+      display.fillRect(x, menuY, width, kLineHeight, SSD1306_WHITE);
+      display.setTextColor(SSD1306_BLACK);
+    } else {
+      display.drawRect(x, menuY, width, kLineHeight, SSD1306_WHITE);
+      display.setTextColor(SSD1306_WHITE);
+    }
     display.setCursor(x + 2, menuY);
     display.print(labels[i]);
+    if (catalogDetailSelectingAction && selected) {
+      display.setTextColor(SSD1306_WHITE);
+    }
   }
   display.setTextColor(SSD1306_WHITE);
 }
@@ -1241,11 +1277,11 @@ void handleLocationInput(int delta) {
       switch (locationEdit.fieldIndex) {
         case 0:
           locationEdit.latitudeDeg =
-              std::clamp(locationEdit.latitudeDeg + delta * 0.1, -90.0, 90.0);
+              std::clamp(locationEdit.latitudeDeg + delta * 0.01, -90.0, 90.0);
           break;
         case 1:
           locationEdit.longitudeDeg =
-              std::clamp(locationEdit.longitudeDeg + delta * 0.1, -180.0, 180.0);
+              std::clamp(locationEdit.longitudeDeg + delta * 0.01, -180.0, 180.0);
           break;
         case 2: {
           int stepMinutes = delta * 15;
@@ -1500,6 +1536,11 @@ void handleBacklashCalibrationInput() {
 }
 
 void render() {
+  MutexLock lock(i2cMutex);
+  if (!lock.locked()) {
+    return;
+  }
+
   display.clearDisplay();
 
   bool showHeader = uiState != UiState::MainMenu;
@@ -1586,27 +1627,40 @@ void enterSetupMenu() {
 
 void enterRtcEditor() {
   DateTime now;
+  const SystemConfig& config = storage::getConfig();
   if (rtcAvailable) {
-    now = rtc.now();
-  } else if (storage::getConfig().lastRtcEpoch != 0) {
-    time_t epoch = storage::getConfig().lastRtcEpoch;
-    now = DateTime(epoch);
+    MutexLock lock(i2cMutex);
+    if (lock.locked()) {
+      time_t utcEpoch = rtc.now().unixtime();
+      now = time_utils::applyTimezone(utcEpoch);
+    } else if (config.lastRtcEpoch != 0) {
+      now = time_utils::applyTimezone(static_cast<time_t>(config.lastRtcEpoch));
+    } else {
+      now = DateTime(2024, 1, 1, 0, 0, 0);
+    }
+  } else if (config.lastRtcEpoch != 0) {
+    now = time_utils::applyTimezone(static_cast<time_t>(config.lastRtcEpoch));
   } else {
     now = DateTime(2024, 1, 1, 0, 0, 0);
   }
   rtcEdit = {now.year(),      now.month(),      now.day(),
              now.hour(),      now.minute(),     now.second(),
              storage::getConfig().dstMode, 0, 0};
+  rtcEditScroll = 0;
   setUiState(UiState::SetRtc);
 }
 
 void applyRtcEdit() {
   DateTime updated(rtcEdit.year, rtcEdit.month, rtcEdit.day, rtcEdit.hour, rtcEdit.minute, rtcEdit.second);
+  time_t utcEpoch = time_utils::toUtcEpoch(updated);
   if (rtcAvailable) {
-    rtc.adjust(updated);
+    MutexLock lock(i2cMutex);
+    if (lock.locked()) {
+      rtc.adjust(DateTime(utcEpoch));
+    }
   }
   storage::setDstMode(rtcEdit.dstMode);
-  storage::setRtcEpoch(updated.unixtime());
+  storage::setRtcEpoch(static_cast<uint32_t>(utcEpoch));
   showInfo("RTC updated");
   setUiState(UiState::SetupMenu);
 }
@@ -2107,7 +2161,9 @@ void handleMainMenuInput(int delta) {
   if (delta != 0) {
     mainMenuIndex += delta;
     while (mainMenuIndex < 0) mainMenuIndex += static_cast<int>(kMainMenuCount);
-    while (mainMenuIndex >= static_cast<int>(kMainMenuCount)) mainMenuIndex -= static_cast<int>(kMainMenuCount);
+    while (mainMenuIndex >= static_cast<int>(kMainMenuCount))
+      mainMenuIndex -= static_cast<int>(kMainMenuCount);
+    mainMenuScroll = mainMenuIndex;
   }
   if (input::consumeJoystickPress()) {
     systemState.menuMode = MenuMode::Status;
@@ -2230,6 +2286,7 @@ void handleSetupMenuInput(int delta) {
     while (setupMenuIndex < 0) setupMenuIndex += static_cast<int>(kSetupMenuCount);
     while (setupMenuIndex >= static_cast<int>(kSetupMenuCount))
       setupMenuIndex -= static_cast<int>(kSetupMenuCount);
+    setupMenuScroll = setupMenuIndex;
   }
   if (input::consumeJoystickPress()) {
     setUiState(UiState::MainMenu);
@@ -2291,38 +2348,43 @@ void handleSetupMenuInput(int delta) {
 }
 
 void handleRtcInput(int delta) {
-  if (delta != 0 && rtcEdit.fieldIndex < kRtcFieldCount - 1) {
-    switch (rtcEdit.fieldIndex) {
-      case 0:
-        rtcEdit.year = std::clamp(rtcEdit.year + delta, 2020, 2100);
-        break;
-      case 1:
-        rtcEdit.month += delta;
-        if (rtcEdit.month < 1) rtcEdit.month = 12;
-        if (rtcEdit.month > 12) rtcEdit.month = 1;
-        break;
-      case 2:
-        rtcEdit.day += delta;
-        if (rtcEdit.day < 1) rtcEdit.day = 31;
-        if (rtcEdit.day > 31) rtcEdit.day = 1;
-        break;
-      case 3:
-        rtcEdit.hour = (rtcEdit.hour + delta + 24) % 24;
-        break;
-      case 4:
-        rtcEdit.minute = (rtcEdit.minute + delta + 60) % 60;
-        break;
-      case 5:
-        rtcEdit.second = (rtcEdit.second + delta + 60) % 60;
-        break;
-      case 6: {
-        int mode = static_cast<int>(rtcEdit.dstMode);
-        mode += delta;
-        while (mode < 0) mode += 3;
-        while (mode >= 3) mode -= 3;
-        rtcEdit.dstMode = static_cast<DstMode>(mode);
-        break;
+  if (delta != 0) {
+    if (rtcEdit.fieldIndex < kRtcFieldCount - 1) {
+      switch (rtcEdit.fieldIndex) {
+        case 0:
+          rtcEdit.year = std::clamp(rtcEdit.year + delta, 2020, 2100);
+          break;
+        case 1:
+          rtcEdit.month += delta;
+          if (rtcEdit.month < 1) rtcEdit.month = 12;
+          if (rtcEdit.month > 12) rtcEdit.month = 1;
+          break;
+        case 2:
+          rtcEdit.day += delta;
+          if (rtcEdit.day < 1) rtcEdit.day = 31;
+          if (rtcEdit.day > 31) rtcEdit.day = 1;
+          break;
+        case 3:
+          rtcEdit.hour = (rtcEdit.hour + delta + 24) % 24;
+          break;
+        case 4:
+          rtcEdit.minute = (rtcEdit.minute + delta + 60) % 60;
+          break;
+        case 5:
+          rtcEdit.second = (rtcEdit.second + delta + 60) % 60;
+          break;
+        case 6: {
+          int mode = static_cast<int>(rtcEdit.dstMode);
+          mode += delta;
+          while (mode < 0) mode += 3;
+          while (mode >= 3) mode -= 3;
+          rtcEdit.dstMode = static_cast<DstMode>(mode);
+          break;
+        }
       }
+    } else {
+      int step = (delta > 0) ? 1 : -1;
+      rtcEdit.actionIndex = (rtcEdit.actionIndex + step + 2) % 2;
     }
   }
   if (input::consumeJoystickPress()) {
@@ -2435,6 +2497,7 @@ void handleCatalogItemListInput(int delta) {
 
   if (input::consumeEncoderClick()) {
     catalogDetailMenuIndex = 0;
+    catalogDetailSelectingAction = false;
     systemState.selectedCatalogTypeIndex = catalogTypeIndex;
     setUiState(UiState::CatalogItemDetail);
     return;
@@ -2447,6 +2510,7 @@ void handleCatalogItemListInput(int delta) {
 
 void handleCatalogItemDetailInput(int delta) {
   if (catalog::size() == 0 || catalog::typeGroupCount() == 0) {
+    catalogDetailSelectingAction = false;
     setUiState(UiState::CatalogTypeBrowser);
     return;
   }
@@ -2455,18 +2519,34 @@ void handleCatalogItemDetailInput(int delta) {
   if (!catalog::getTypeSummary(static_cast<size_t>(catalogTypeIndex), summary) ||
       summary.objectCount == 0) {
     showInfo("Empty type");
+    catalogDetailSelectingAction = false;
     setUiState(UiState::CatalogTypeBrowser);
     return;
   }
 
-  if (catalogTypeObjectIndex < 0 || catalogTypeObjectIndex >= static_cast<int>(summary.objectCount)) {
-    catalogTypeObjectIndex = 0;
+  int total = static_cast<int>(summary.objectCount);
+  if (catalogTypeObjectIndex < 0 || catalogTypeObjectIndex >= total) {
+    catalogTypeObjectIndex = ((catalogTypeObjectIndex % total) + total) % total;
+  }
+
+  if (delta != 0) {
+    if (catalogDetailSelectingAction) {
+      catalogDetailMenuIndex += delta;
+      while (catalogDetailMenuIndex < 0) catalogDetailMenuIndex += kCatalogDetailMenuCount;
+      while (catalogDetailMenuIndex >= kCatalogDetailMenuCount)
+        catalogDetailMenuIndex -= kCatalogDetailMenuCount;
+    } else {
+      catalogTypeObjectIndex += delta;
+      while (catalogTypeObjectIndex < 0) catalogTypeObjectIndex += total;
+      while (catalogTypeObjectIndex >= total) catalogTypeObjectIndex -= total;
+    }
   }
 
   size_t globalIndex = 0;
   if (!catalog::getTypeObjectIndex(static_cast<size_t>(catalogTypeIndex),
                                    static_cast<size_t>(catalogTypeObjectIndex), globalIndex)) {
     showInfo("Invalid entry");
+    catalogDetailSelectingAction = false;
     setUiState(UiState::CatalogTypeBrowser);
     return;
   }
@@ -2475,29 +2555,34 @@ void handleCatalogItemDetailInput(int delta) {
   if (catalogDetailMenuIndex < 0 || catalogDetailMenuIndex >= kCatalogDetailMenuCount) {
     catalogDetailMenuIndex = 0;
   }
-  if (delta != 0) {
-    catalogDetailMenuIndex += delta;
-    while (catalogDetailMenuIndex < 0) catalogDetailMenuIndex += kCatalogDetailMenuCount;
-    while (catalogDetailMenuIndex >= kCatalogDetailMenuCount) catalogDetailMenuIndex -= kCatalogDetailMenuCount;
-  }
 
   if (input::consumeEncoderClick()) {
+    if (!catalogDetailSelectingAction) {
+      catalogDetailSelectingAction = true;
+      catalogDetailMenuIndex = 0;
+      return;
+    }
+
     if (catalogDetailMenuIndex == 0) {
-      systemState.selectedCatalogIndex = catalogIndex;
-      systemState.selectedCatalogTypeIndex = catalogTypeIndex;
       const CatalogObject* object = catalog::get(globalIndex);
       if (object && startGotoToObject(*object, catalogIndex)) {
         selectedObjectName = sanitizeForDisplay(object->name);
         gotoTargetName = sanitizeForDisplay(object->name);
       }
+      catalogDetailSelectingAction = false;
     } else {
+      catalogDetailSelectingAction = false;
       setUiState(UiState::CatalogItemList);
       return;
     }
   }
 
   if (input::consumeJoystickPress()) {
-    setUiState(UiState::CatalogItemList);
+    if (catalogDetailSelectingAction) {
+      catalogDetailSelectingAction = false;
+    } else {
+      setUiState(UiState::CatalogItemList);
+    }
   }
 }
 
@@ -2515,11 +2600,14 @@ void handlePolarAlignInput() {
 
 }  // namespace
 
-void applyNetworkTime(const DateTime& localTime) {
+void applyNetworkTime(time_t utcEpoch) {
   if (rtcAvailable) {
-    rtc.adjust(localTime);
+    MutexLock lock(i2cMutex);
+    if (lock.locked()) {
+      rtc.adjust(DateTime(utcEpoch));
+    }
   }
-  storage::setRtcEpoch(localTime.unixtime());
+  storage::setRtcEpoch(static_cast<uint32_t>(utcEpoch));
 }
 
 void stopTracking() {
@@ -2531,23 +2619,41 @@ void stopTracking() {
 }
 
 void init() {
-  Wire.begin(config::SDA_PIN, config::SCL_PIN);
-  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-    // OLED init failure will be reported via on-screen message; avoid serial
-    // output because the primary UART is reserved for the inter-board link.
+  if (i2cMutex == nullptr) {
+    i2cMutex = xSemaphoreCreateRecursiveMutexStatic(&i2cMutexBuffer);
   }
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.clearDisplay();
-  display.display();
 
-  rtcAvailable = rtc.begin();
+  Wire.begin(config::SDA_PIN, config::SCL_PIN);
+
+  auto initPeripherals = [&]() {
+    if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+      // OLED init failure will be reported via on-screen message; avoid serial
+      // output because the primary UART is reserved for the inter-board link.
+    }
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.clearDisplay();
+    display.display();
+
+    rtcAvailable = rtc.begin();
+  };
+
+  {
+    MutexLock lock(i2cMutex);
+    (void)lock;
+    initPeripherals();
+  }
+
   if (!rtcAvailable) {
     showInfo("RTC missing", 2000);
   }
 }
 
 void showBootMessage() {
+  MutexLock lock(i2cMutex);
+  if (!lock.locked()) {
+    return;
+  }
   display.clearDisplay();
   display.setCursor(0, 0);
   display.print("NERDSTAR booting...");
@@ -2555,6 +2661,10 @@ void showBootMessage() {
 }
 
 void showCalibrationStart() {
+  MutexLock lock(i2cMutex);
+  if (!lock.locked()) {
+    return;
+  }
   display.clearDisplay();
   display.setCursor(0, 0);
   display.print("Calibrating joystick");
@@ -2562,18 +2672,28 @@ void showCalibrationStart() {
 }
 
 void showCalibrationResult(int centerX, int centerY) {
-  display.clearDisplay();
-  display.setCursor(0, 0);
-  display.print("Calibration done");
-  display.setCursor(0, 16);
-  display.printf("CX=%d", centerX);
-  display.setCursor(0, 24);
-  display.printf("CY=%d", centerY);
-  display.display();
+  {
+    MutexLock lock(i2cMutex);
+    if (!lock.locked()) {
+      return;
+    }
+    display.clearDisplay();
+    display.setCursor(0, 0);
+    display.print("Calibration done");
+    display.setCursor(0, 16);
+    display.printf("CX=%d", centerX);
+    display.setCursor(0, 24);
+    display.printf("CY=%d", centerY);
+    display.display();
+  }
   delay(1000);
 }
 
 void showReady() {
+  MutexLock lock(i2cMutex);
+  if (!lock.locked()) {
+    return;
+  }
   display.clearDisplay();
   display.setCursor(0, 0);
   display.print("NERDSTAR ready");

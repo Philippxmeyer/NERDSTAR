@@ -11,6 +11,11 @@
 
 namespace {
 
+static_assert(config::JOYSTICK_X_DIRECTION == 1 || config::JOYSTICK_X_DIRECTION == -1,
+              "JOYSTICK_X_DIRECTION must be either 1 or -1");
+static_assert(config::JOYSTICK_Y_DIRECTION == 1 || config::JOYSTICK_Y_DIRECTION == -1,
+              "JOYSTICK_Y_DIRECTION must be either 1 or -1");
+
 constexpr int kEncoderStepsPerNotch = 2;
 constexpr long kEncoderMinValue = -100000;
 constexpr long kEncoderMaxValue = 100000;
@@ -248,7 +253,7 @@ float getJoystickNormalizedX() {
   }
   if (normalized > 1.0f) normalized = 1.0f;
   if (normalized < -1.0f) normalized = -1.0f;
-  return normalized;
+  return normalized * static_cast<float>(config::JOYSTICK_X_DIRECTION);
 }
 
 float getJoystickNormalizedY() {
@@ -259,7 +264,7 @@ float getJoystickNormalizedY() {
   }
   if (normalized > 1.0f) normalized = 1.0f;
   if (normalized < -1.0f) normalized = -1.0f;
-  return normalized;
+  return normalized * static_cast<float>(config::JOYSTICK_Y_DIRECTION);
 }
 
 bool consumeJoystickPress() {

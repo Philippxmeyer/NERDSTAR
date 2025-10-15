@@ -11,17 +11,7 @@ namespace {
 
 constexpr uint32_t kConfigMagic = 0x4E455244;  // "NERD"
 constexpr size_t kConfigStorageSize = 256;
-constexpr uint32_t kCatalogMagic = 0x4E434154;  // "NCAT"
-constexpr uint16_t kCatalogVersion = 2;
-
-struct __attribute__((packed)) CatalogHeader {
-  uint32_t magic;
-  uint16_t version;
-  uint16_t count;
-  uint16_t entriesOffset;
-  uint16_t stringsOffset;
-  uint16_t stringsLength;
-};
+bool eepromReady = false;
 
 SystemConfig systemConfig{
     kConfigMagic,
@@ -37,31 +27,16 @@ SystemConfig systemConfig{
     false,
     false,
     0,
-    {3.0f, 1.0f, 1.0f},
-    {0},
-    {0}};
+    {3.0f, 1.0f, 1.0f}};
 
 static_assert(sizeof(SystemConfig) <= kConfigStorageSize, "SystemConfig too large for config storage");
 
 static_assert(sizeof(storage::CatalogEntry) == 12, "CatalogEntry packing mismatch");
-static_assert(sizeof(CatalogHeader) == 14, "CatalogHeader packing mismatch");
 
 // `catalog_data.inc` is a generated binary blob that contains the default catalog data.
 // It is produced from `data/catalog.xml` via `tools/build_catalog.py` and embedded into
 // the firmware image so we can seed the emulated EEPROM on first boot.
 #include "catalog_data.inc"
-
-constexpr size_t kCatalogHeaderOffset = kConfigStorageSize;
-constexpr size_t kCatalogEntriesOffset = kCatalogHeaderOffset + sizeof(CatalogHeader);
-constexpr size_t kCatalogStringsOffset =
-    kCatalogEntriesOffset + kCatalogEntryCount * sizeof(storage::CatalogEntry);
-constexpr size_t kCatalogStorageSize = sizeof(CatalogHeader) +
-                                       kCatalogEntryCount * sizeof(storage::CatalogEntry) +
-                                       kCatalogStringTableSize;
-constexpr size_t kEepromSize = kConfigStorageSize + kCatalogStorageSize;
-
-static_assert(kCatalogStringsOffset + kCatalogStringTableSize <= kEepromSize,
-              "EEPROM size insufficient for catalog data");
 
 void applyDefaults() {
   constexpr double stepsPerMotorRev = config::FULLSTEPS_PER_REV * config::MICROSTEPS;
@@ -87,8 +62,6 @@ void applyDefaults() {
   systemConfig.panningProfile.maxSpeedDegPerSec = 3.0f;
   systemConfig.panningProfile.accelerationDegPerSec2 = 1.0f;
   systemConfig.panningProfile.decelerationDegPerSec2 = 1.0f;
-  memset(systemConfig.wifiSsid, 0, sizeof(systemConfig.wifiSsid));
-  memset(systemConfig.wifiPassword, 0, sizeof(systemConfig.wifiPassword));
 }
 
 bool profileIsInvalid(const GotoProfile& profile) {
@@ -98,40 +71,11 @@ bool profileIsInvalid(const GotoProfile& profile) {
 }
 
 void saveConfigInternal() {
+  if (!eepromReady) {
+    return;
+  }
   EEPROM.put(0, systemConfig);
   EEPROM.commit();
-}
-
-bool catalogDataIsValid() {
-  CatalogHeader header{};
-  EEPROM.get(kCatalogHeaderOffset, header);
-  return header.magic == kCatalogMagic && header.version == kCatalogVersion &&
-         header.count == kCatalogEntryCount && header.entriesOffset == kCatalogEntriesOffset &&
-         header.stringsOffset == kCatalogStringsOffset && header.stringsLength == kCatalogStringTableSize;
-}
-
-void writeCatalogToEeprom() {
-  CatalogHeader header{kCatalogMagic,
-                       kCatalogVersion,
-                       static_cast<uint16_t>(kCatalogEntryCount),
-                       static_cast<uint16_t>(kCatalogEntriesOffset),
-                       static_cast<uint16_t>(kCatalogStringsOffset),
-                       static_cast<uint16_t>(kCatalogStringTableSize)};
-  EEPROM.put(kCatalogHeaderOffset, header);
-  for (size_t i = 0; i < kCatalogEntryCount; ++i) {
-    const auto& entry = kCatalogEntries[i];
-    EEPROM.put(kCatalogEntriesOffset + i * sizeof(storage::CatalogEntry), entry);
-  }
-  for (size_t i = 0; i < kCatalogStringTableSize; ++i) {
-    EEPROM.write(kCatalogStringsOffset + i, static_cast<uint8_t>(kCatalogStrings[i]));
-  }
-  EEPROM.commit();
-}
-
-void ensureCatalogData() {
-  if (!catalogDataIsValid()) {
-    writeCatalogToEeprom();
-  }
 }
 
 }  // namespace
@@ -139,7 +83,11 @@ void ensureCatalogData() {
 namespace storage {
 
 bool init() {
-  EEPROM.begin(kEepromSize);
+  eepromReady = EEPROM.begin(kConfigStorageSize);
+  if (!eepromReady) {
+    applyDefaults();
+    return false;
+  }
   EEPROM.get(0, systemConfig);
   if (systemConfig.magic != kConfigMagic || systemConfig.axisCalibration.stepsPerDegreeAz <= 0.0 ||
       systemConfig.axisCalibration.stepsPerDegreeAlt <= 0.0) {
@@ -172,11 +120,7 @@ bool init() {
     if (static_cast<uint8_t>(systemConfig.dstMode) > static_cast<uint8_t>(DstMode::Auto)) {
       systemConfig.dstMode = DstMode::Auto;
     }
-    systemConfig.wifiSsid[sizeof(systemConfig.wifiSsid) - 1] = '\0';
-    systemConfig.wifiPassword[sizeof(systemConfig.wifiPassword) - 1] = '\0';
   }
-
-  ensureCatalogData();
   return true;
 }
 
@@ -234,34 +178,6 @@ void setDstMode(DstMode mode) {
   saveConfigInternal();
 }
 
-bool hasWifiCredentials() { return systemConfig.wifiSsid[0] != '\0'; }
-
-void setWifiCredentials(const char* ssid, const char* password) {
-  if (!ssid) ssid = "";
-  if (!password) password = "";
-
-  char newSsid[sizeof(systemConfig.wifiSsid)];
-  char newPassword[sizeof(systemConfig.wifiPassword)];
-  strncpy(newSsid, ssid, sizeof(newSsid) - 1);
-  newSsid[sizeof(newSsid) - 1] = '\0';
-  strncpy(newPassword, password, sizeof(newPassword) - 1);
-  newPassword[sizeof(newPassword) - 1] = '\0';
-
-  if (strcmp(systemConfig.wifiSsid, newSsid) == 0 && strcmp(systemConfig.wifiPassword, newPassword) == 0) {
-    return;
-  }
-
-  strncpy(systemConfig.wifiSsid, newSsid, sizeof(systemConfig.wifiSsid));
-  systemConfig.wifiSsid[sizeof(systemConfig.wifiSsid) - 1] = '\0';
-  strncpy(systemConfig.wifiPassword, newPassword, sizeof(systemConfig.wifiPassword));
-  systemConfig.wifiPassword[sizeof(systemConfig.wifiPassword) - 1] = '\0';
-  saveConfigInternal();
-}
-
-const char* wifiSsid() { return systemConfig.wifiSsid; }
-
-const char* wifiPassword() { return systemConfig.wifiPassword; }
-
 void save() { saveConfigInternal(); }
 
 size_t getCatalogEntryCount() { return kCatalogEntryCount; }
@@ -270,8 +186,7 @@ bool readCatalogEntry(size_t index, CatalogEntry& entry) {
   if (index >= kCatalogEntryCount) {
     return false;
   }
-  size_t address = kCatalogEntriesOffset + index * sizeof(CatalogEntry);
-  EEPROM.get(address, entry);
+  entry = kCatalogEntries[index];
   return true;
 }
 
@@ -285,9 +200,7 @@ bool readCatalogString(uint16_t offset, uint8_t length, char* buffer, size_t buf
   if (bufferSize <= length) {
     return false;
   }
-  for (uint8_t i = 0; i < length; ++i) {
-    buffer[i] = static_cast<char>(EEPROM.read(kCatalogStringsOffset + offset + i));
-  }
+  memcpy(buffer, &kCatalogStrings[offset], length);
   buffer[length] = '\0';
   return true;
 }

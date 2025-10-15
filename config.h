@@ -58,18 +58,21 @@ constexpr uint32_t USB_DEBUG_BAUD = 115200;
 // Motion configuration
 constexpr double FULLSTEPS_PER_REV = 32.0 * 64.0; // 2048
 constexpr double MICROSTEPS = 16.0;
+// Fallback manual slewing limit (RPM) used if no panning profile cap is set
 constexpr float MAX_RPM_MANUAL = 3.0f;
 constexpr float GEAR_RATIO = 4.0f; // 1:4 reduction motor:telescope
 constexpr float JOYSTICK_DEADZONE = 0.03f;
+constexpr int JOYSTICK_X_DIRECTION = 1;  // Use -1 to invert the azimuth axis
+constexpr int JOYSTICK_Y_DIRECTION = 1;  // Use -1 to invert the altitude axis
 
 // Display configuration
 constexpr uint8_t OLED_WIDTH = 128;
 constexpr uint8_t OLED_HEIGHT = 64;
 
 // WiFi / OTA configuration
-constexpr const char* WIFI_AP_SSID_PREFIX = "NERDSTAR";
-constexpr const char* WIFI_AP_PASSWORD = "nerdstar";
 constexpr const char* WIFI_HOSTNAME_PREFIX = "nerdstar";
+constexpr const char* WIFI_STA_SSID = "";       // Set to home network SSID
+constexpr const char* WIFI_STA_PASSWORD = "";   // Set to home network password
 
 // Astronomy constants
 constexpr double SIDEREAL_DAY_SECONDS = 86164.0905;

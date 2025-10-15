@@ -6,6 +6,7 @@
 
 #include <Arduino.h>
 #include <RTClib.h>
+#include <time.h>
 
 namespace display_menu {
 
@@ -22,7 +23,7 @@ void startPolarAlignment();
 void update();
 void setSdAvailable(bool available);
 void stopTracking();
-void applyNetworkTime(const DateTime& localTime);
+void applyNetworkTime(time_t utcEpoch);
 
 } // namespace display_menu
 

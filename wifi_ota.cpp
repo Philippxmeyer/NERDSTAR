@@ -2,10 +2,10 @@
 
 #include <ArduinoOTA.h>
 #include <WiFi.h>
+#include <time.h>
 
 #include "config.h"
 #include "storage.h"
-#include "time_utils.h"
 
 #if defined(DEVICE_ROLE_HID)
 #include "display_menu.h"
@@ -19,6 +19,9 @@ bool wifiConnected = false;
 bool otaActive = false;
 bool ntpSynced = false;
 String otaHostname;
+
+enum class NtpStatus { None, Success, Failure };
+NtpStatus lastReportedNtpStatus = NtpStatus::None;
 
 constexpr uint32_t kReconnectIntervalMs = 10000;
 constexpr uint32_t kNtpResyncIntervalMs = 6UL * 60UL * 60UL * 1000UL;
@@ -54,12 +57,15 @@ void stopWifi() {
   wifiEnabled = false;
   wifiConnected = false;
   ntpSynced = false;
+  lastReportedNtpStatus = NtpStatus::None;
   lastReconnectAttemptMs = 0;
   lastNtpSyncMs = 0;
   lastNtpAttemptMs = 0;
 }
 
-bool credentialsAvailable() { return storage::hasWifiCredentials(); }
+bool credentialsAvailable() {
+  return config::WIFI_STA_SSID && config::WIFI_STA_SSID[0] != '\0';
+}
 
 void beginWifi() {
   ensureIdentity();
@@ -68,11 +74,12 @@ void beginWifi() {
   WiFi.setHostname(otaHostname.c_str());
   WiFi.setAutoReconnect(true);
   ArduinoOTA.setHostname(otaHostname.c_str());
-  WiFi.begin(storage::wifiSsid(), storage::wifiPassword());
+  WiFi.begin(config::WIFI_STA_SSID, config::WIFI_STA_PASSWORD);
   wifiEnabled = true;
   wifiConnected = false;
   otaActive = false;
   ntpSynced = false;
+  lastReportedNtpStatus = NtpStatus::None;
   lastReconnectAttemptMs = millis();
   lastNtpSyncMs = 0;
   lastNtpAttemptMs = 0;
@@ -86,16 +93,28 @@ bool syncTimeWithNtp() {
     return false;
   }
   time_t utcEpoch = mktime(&timeinfo);
-  DateTime localTime = time_utils::applyTimezone(utcEpoch);
 #if defined(DEVICE_ROLE_HID)
-  display_menu::applyNetworkTime(localTime);
+  display_menu::applyNetworkTime(utcEpoch);
 #else
-  storage::setRtcEpoch(localTime.unixtime());
+  storage::setRtcEpoch(static_cast<uint32_t>(utcEpoch));
 #endif
   return true;
 }
 
+void notifyNtpStatus(bool success) {
+#if defined(DEVICE_ROLE_HID)
+  NtpStatus status = success ? NtpStatus::Success : NtpStatus::Failure;
+  if (status != lastReportedNtpStatus) {
+    display_menu::showInfo(success ? "NTP sync ok" : "NTP sync failed", success ? 2000 : 2500);
+    lastReportedNtpStatus = status;
+  }
+#else
+  (void)success;
+#endif
+}
+
 void handleConnectedState() {
+  uint32_t now = millis();
   if (!wifiConnected) {
     wifiConnected = true;
     if (!otaActive) {
@@ -104,14 +123,21 @@ void handleConnectedState() {
     }
     ntpSynced = false;
     lastNtpSyncMs = 0;
-    lastNtpAttemptMs = 0;
+    bool success = syncTimeWithNtp();
+    uint32_t attemptTime = millis();
+    ntpSynced = success;
+    lastNtpAttemptMs = attemptTime;
+    if (success) {
+      lastNtpSyncMs = attemptTime;
+    }
+    notifyNtpStatus(success);
+    return;
   }
 
   if (otaActive) {
     ArduinoOTA.handle();
   }
 
-  uint32_t now = millis();
   bool shouldSync = false;
   if (!ntpSynced) {
     if (now - lastNtpAttemptMs >= kNtpRetryIntervalMs) {
@@ -123,11 +149,14 @@ void handleConnectedState() {
   }
 
   if (shouldSync) {
-    if (syncTimeWithNtp()) {
-      ntpSynced = true;
-      lastNtpSyncMs = now;
+    bool success = syncTimeWithNtp();
+    uint32_t attemptTime = millis();
+    ntpSynced = success;
+    if (success) {
+      lastNtpSyncMs = attemptTime;
     }
-    lastNtpAttemptMs = now;
+    lastNtpAttemptMs = attemptTime;
+    notifyNtpStatus(success);
   }
 }
 
@@ -138,12 +167,13 @@ void handleDisconnectedState() {
       otaActive = false;
     }
     wifiConnected = false;
+    lastReportedNtpStatus = NtpStatus::None;
   }
   uint32_t now = millis();
   if (wifiEnabled && credentialsAvailable() &&
       (lastReconnectAttemptMs == 0 || now - lastReconnectAttemptMs >= kReconnectIntervalMs)) {
     WiFi.disconnect(true, true);
-    WiFi.begin(storage::wifiSsid(), storage::wifiPassword());
+    WiFi.begin(config::WIFI_STA_SSID, config::WIFI_STA_PASSWORD);
     lastReconnectAttemptMs = now;
   }
 }
@@ -159,6 +189,7 @@ void init() {
   wifiConnected = false;
   otaActive = false;
   ntpSynced = false;
+  lastReportedNtpStatus = NtpStatus::None;
   lastReconnectAttemptMs = 0;
   lastNtpSyncMs = 0;
   lastNtpAttemptMs = 0;
@@ -192,7 +223,7 @@ bool credentialsConfigured() { return credentialsAvailable(); }
 
 bool isConnected() { return wifiConnected && WiFi.status() == WL_CONNECTED; }
 
-const char* ssid() { return storage::wifiSsid(); }
+const char* ssid() { return config::WIFI_STA_SSID; }
 
 void update() {
   if (!wifiEnabled) {
