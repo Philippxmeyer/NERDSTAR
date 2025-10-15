@@ -21,6 +21,7 @@ uint32_t g_linkInactiveSinceMs = 0;
 uint32_t g_linkActiveSinceMs = 0;
 constexpr uint32_t kLinkReadyConfirmMs = 250;
 constexpr uint32_t kLinkOfflineConfirmMs = 750;
+constexpr float kDegreesPerSecondPerRpm = 360.0f / 60.0f;
 
 void initDebugSerial() {
   Serial.begin(config::USB_DEBUG_BAUD);
@@ -89,8 +90,14 @@ void loop() {
   systemState.joystickButtonPressed = input::isJoystickButtonPressed();
   systemState.joystickActive = (fabs(azInput) > config::JOYSTICK_DEADZONE ||
                                 fabs(altInput) > config::JOYSTICK_DEADZONE);
-  motion::setManualRate(Axis::Az, azInput * config::MAX_RPM_MANUAL);
-  motion::setManualRate(Axis::Alt, altInput * config::MAX_RPM_MANUAL);
+  const SystemConfig& systemConfig = storage::getConfig();
+  float manualMaxRpm = config::MAX_RPM_MANUAL;
+  float panningMaxSpeed = systemConfig.panningProfile.maxSpeedDegPerSec;
+  if (panningMaxSpeed > 0.0f) {
+    manualMaxRpm = panningMaxSpeed / kDegreesPerSecondPerRpm;
+  }
+  motion::setManualRate(Axis::Az, azInput * manualMaxRpm);
+  motion::setManualRate(Axis::Alt, altInput * manualMaxRpm);
 
   if (systemState.gotoActive) {
     if (input::consumeJoystickPress()) {
