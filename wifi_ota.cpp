@@ -2,10 +2,10 @@
 
 #include <ArduinoOTA.h>
 #include <WiFi.h>
+#include <time.h>
 
 #include "config.h"
 #include "storage.h"
-#include "time_utils.h"
 
 #if defined(DEVICE_ROLE_HID)
 #include "display_menu.h"
@@ -88,11 +88,10 @@ bool syncTimeWithNtp() {
     return false;
   }
   time_t utcEpoch = mktime(&timeinfo);
-  DateTime localTime = time_utils::applyTimezone(utcEpoch);
 #if defined(DEVICE_ROLE_HID)
-  display_menu::applyNetworkTime(localTime);
+  display_menu::applyNetworkTime(utcEpoch);
 #else
-  storage::setRtcEpoch(localTime.unixtime());
+  storage::setRtcEpoch(static_cast<uint32_t>(utcEpoch));
 #endif
   return true;
 }

@@ -242,7 +242,8 @@ void drawHeader() {
   display.setCursor(0, 0);
   display.print("NERDSTAR");
   if (rtcAvailable) {
-    DateTime now = rtc.now();
+    time_t utcEpoch = rtc.now().unixtime();
+    DateTime now = time_utils::applyTimezone(utcEpoch);
     char buffer[20];
     snprintf(buffer, sizeof(buffer), "%02d:%02d:%02d", now.hour(), now.minute(), now.second());
     int16_t x1, y1;
@@ -421,11 +422,13 @@ double applyAtmosphericRefraction(double geometricAltitudeDeg) {
 }
 
 DateTime currentDateTime() {
+  const SystemConfig& config = storage::getConfig();
   if (rtcAvailable) {
-    return rtc.now();
+    time_t utcEpoch = rtc.now().unixtime();
+    return time_utils::applyTimezone(utcEpoch);
   }
-  if (storage::getConfig().lastRtcEpoch != 0) {
-    return DateTime(storage::getConfig().lastRtcEpoch);
+  if (config.lastRtcEpoch != 0) {
+    return time_utils::applyTimezone(static_cast<time_t>(config.lastRtcEpoch));
   }
   return DateTime(2024, 1, 1, 0, 0, 0);
 }
@@ -1234,11 +1237,11 @@ void handleLocationInput(int delta) {
       switch (locationEdit.fieldIndex) {
         case 0:
           locationEdit.latitudeDeg =
-              std::clamp(locationEdit.latitudeDeg + delta * 0.1, -90.0, 90.0);
+              std::clamp(locationEdit.latitudeDeg + delta * 0.01, -90.0, 90.0);
           break;
         case 1:
           locationEdit.longitudeDeg =
-              std::clamp(locationEdit.longitudeDeg + delta * 0.1, -180.0, 180.0);
+              std::clamp(locationEdit.longitudeDeg + delta * 0.01, -180.0, 180.0);
           break;
         case 2: {
           int stepMinutes = delta * 15;
@@ -1579,11 +1582,12 @@ void enterSetupMenu() {
 
 void enterRtcEditor() {
   DateTime now;
+  const SystemConfig& config = storage::getConfig();
   if (rtcAvailable) {
-    now = rtc.now();
-  } else if (storage::getConfig().lastRtcEpoch != 0) {
-    time_t epoch = storage::getConfig().lastRtcEpoch;
-    now = DateTime(epoch);
+    time_t utcEpoch = rtc.now().unixtime();
+    now = time_utils::applyTimezone(utcEpoch);
+  } else if (config.lastRtcEpoch != 0) {
+    now = time_utils::applyTimezone(static_cast<time_t>(config.lastRtcEpoch));
   } else {
     now = DateTime(2024, 1, 1, 0, 0, 0);
   }
@@ -1596,11 +1600,12 @@ void enterRtcEditor() {
 
 void applyRtcEdit() {
   DateTime updated(rtcEdit.year, rtcEdit.month, rtcEdit.day, rtcEdit.hour, rtcEdit.minute, rtcEdit.second);
+  time_t utcEpoch = time_utils::toUtcEpoch(updated);
   if (rtcAvailable) {
-    rtc.adjust(updated);
+    rtc.adjust(DateTime(utcEpoch));
   }
   storage::setDstMode(rtcEdit.dstMode);
-  storage::setRtcEpoch(updated.unixtime());
+  storage::setRtcEpoch(static_cast<uint32_t>(utcEpoch));
   showInfo("RTC updated");
   setUiState(UiState::SetupMenu);
 }
@@ -2514,11 +2519,11 @@ void handlePolarAlignInput() {
 
 }  // namespace
 
-void applyNetworkTime(const DateTime& localTime) {
+void applyNetworkTime(time_t utcEpoch) {
   if (rtcAvailable) {
-    rtc.adjust(localTime);
+    rtc.adjust(DateTime(utcEpoch));
   }
-  storage::setRtcEpoch(localTime.unixtime());
+  storage::setRtcEpoch(static_cast<uint32_t>(utcEpoch));
 }
 
 void stopTracking() {
