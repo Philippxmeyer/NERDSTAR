@@ -40,6 +40,7 @@ constexpr int kLineHeight = 8;
 enum class UiState {
   StatusScreen,
   StatusDetails,
+  StartupLockPrompt,
   MainMenu,
   PolarAlign,
   SetupMenu,
@@ -234,6 +235,12 @@ constexpr int kCatalogDetailMenuCount = 2;
 String infoMessage;
 uint32_t infoUntil = 0;
 portMUX_TYPE displayMux = portMUX_INITIALIZER_UNLOCKED;
+bool orientationKnown = false;
+bool startupPromptActive = false;
+int startupPromptIndex = 0;
+constexpr const char* kStartupPromptItems[] = {
+    "Use saved lock", "New Polaris lock", "Discard lock"};
+constexpr size_t kStartupPromptCount = sizeof(kStartupPromptItems) / sizeof(kStartupPromptItems[0]);
 
 class MutexLock {
  public:
@@ -265,6 +272,9 @@ void setUiState(UiState state) {
 void abortGoto();
 bool startGotoToCoordinates(double raHours, double decDegrees, const String& label);
 bool startParkPosition();
+void applyOrientationState(bool known);
+void drawStartupLockPrompt();
+void handleStartupLockPromptInput(int delta);
 
 void drawHeader() {
   display.setTextColor(SSD1306_WHITE);
@@ -599,8 +609,12 @@ double computeTravelTimeSteps(double distanceSteps,
 }
 
 void drawStatus(bool diagnostics) {
-  double azDeg = motion::stepsToAzDegrees(motion::getStepCount(Axis::Az));
-  double altDeg = motion::stepsToAltDegrees(motion::getStepCount(Axis::Alt));
+  double azDeg = 0.0;
+  double altDeg = 0.0;
+  if (orientationKnown) {
+    azDeg = motion::stepsToAzDegrees(motion::getStepCount(Axis::Az));
+    altDeg = motion::stepsToAltDegrees(motion::getStepCount(Axis::Alt));
+  }
   char azBuffer[24];
   char altBuffer[24];
   snprintf(azBuffer, sizeof(azBuffer), "%06.2f%c", azDeg, kDegreeSymbol);
@@ -699,6 +713,24 @@ void drawStatus(bool diagnostics) {
     display.setCursor(118, 50);
     display.print(systemState.manualCommandOk ? "C" : "!");
   }
+}
+
+void drawStartupLockPrompt() {
+  display.setCursor(0, 12);
+  display.print("Saved lock found");
+  display.setCursor(0, 20);
+  display.print("Select action:");
+
+  int y = 32;
+  for (size_t i = 0; i < kStartupPromptCount; ++i) {
+    display.setCursor(0, y);
+    display.print((startupPromptIndex == static_cast<int>(i)) ? "> " : "  ");
+    display.print(kStartupPromptItems[i]);
+    y += kLineHeight;
+  }
+
+  display.setCursor(0, 32 + static_cast<int>(kStartupPromptCount) * kLineHeight);
+  display.print("Enc/Joy=Confirm");
 }
 
 void drawStatusMenuPrompt() {
@@ -1564,6 +1596,9 @@ void render() {
     case UiState::StatusDetails:
       drawStatus(true);
       break;
+    case UiState::StartupLockPrompt:
+      drawStartupLockPrompt();
+      break;
     case UiState::MainMenu:
       drawMainMenu();
       break;
@@ -1833,6 +1868,10 @@ bool computeManualTarget(double raHours,
 
 template <typename ComputeFn>
 bool planGotoTarget(const String& targetName, int targetCatalogIndex, ComputeFn computeTarget) {
+  if (!systemState.polarAligned || !orientationKnown) {
+    showInfo("Align first");
+    return false;
+  }
   const AxisCalibration& cal = storage::getConfig().axisCalibration;
   if (cal.stepsPerDegreeAz <= 0.0 || cal.stepsPerDegreeAlt <= 0.0) {
     showInfo("Calibrate axes");
@@ -2586,6 +2625,52 @@ void handleCatalogItemDetailInput(int delta) {
   }
 }
 
+void handleStartupLockPromptInput(int delta) {
+  if (!startupPromptActive) {
+    setUiState(UiState::StatusScreen);
+    return;
+  }
+
+  if (delta != 0) {
+    startupPromptIndex += delta;
+    while (startupPromptIndex < 0) startupPromptIndex += static_cast<int>(kStartupPromptCount);
+    while (startupPromptIndex >= static_cast<int>(kStartupPromptCount))
+      startupPromptIndex -= static_cast<int>(kStartupPromptCount);
+  }
+
+  bool confirm = input::consumeEncoderClick();
+  if (!confirm) {
+    confirm = input::consumeJoystickPress();
+  }
+  if (!confirm) {
+    return;
+  }
+
+  startupPromptActive = false;
+
+  switch (startupPromptIndex) {
+    case 0:  // Use saved lock
+      systemState.polarAligned = true;
+      storage::setPolarAligned(true);
+      setOrientationKnown(true);
+      systemState.menuMode = MenuMode::Status;
+      setUiState(UiState::StatusScreen);
+      showInfo("Using saved lock", 2000);
+      break;
+    case 1:  // New Polaris lock
+      startPolarAlignment();
+      break;
+    default:  // Discard lock
+      systemState.polarAligned = false;
+      storage::setPolarAligned(false);
+      setOrientationKnown(false);
+      systemState.menuMode = MenuMode::Status;
+      setUiState(UiState::StatusScreen);
+      showInfo("Lock discarded", 2000);
+      break;
+  }
+}
+
 void handlePolarAlignInput() {
   bool select = input::consumeEncoderClick();
   if (select) {
@@ -2617,6 +2702,23 @@ void stopTracking() {
   motion::setTrackingEnabled(false);
   motion::setTrackingRates(0.0, 0.0);
 }
+
+void applyOrientationState(bool known) {
+  orientationKnown = known;
+  if (!known) {
+    stopTracking();
+    motion::setAltitudeLimitsEnabled(false);
+    gotoRuntime.active = false;
+    systemState.gotoActive = false;
+    motion::clearGotoRates();
+    motion::setStepCount(Axis::Az, 0);
+    motion::setStepCount(Axis::Alt, 0);
+  } else {
+    motion::setAltitudeLimitsEnabled(true);
+  }
+}
+
+void setOrientationKnown(bool known) { applyOrientationState(known); }
 
 void init() {
   if (i2cMutex == nullptr) {
@@ -2700,6 +2802,17 @@ void showReady() {
   display.display();
 }
 
+void prepareStartupLockPrompt(bool hasSavedLock) {
+  startupPromptActive = hasSavedLock;
+  startupPromptIndex = 0;
+  systemState.menuMode = MenuMode::Status;
+  if (hasSavedLock) {
+    setUiState(UiState::StartupLockPrompt);
+  } else {
+    setUiState(UiState::StatusScreen);
+  }
+}
+
 void startTask() {
   xTaskCreatePinnedToCore(displayTask, "display", 4096, nullptr, 1, nullptr, 0);
 }
@@ -2735,6 +2848,9 @@ void handleInput() {
       break;
     case UiState::StatusDetails:
       handleStatusDetailsInput();
+      break;
+    case UiState::StartupLockPrompt:
+      handleStartupLockPromptInput(delta);
       break;
     case UiState::MainMenu:
       handleMainMenuInput(delta);
@@ -2806,6 +2922,7 @@ void completePolarAlignment() {
     motion::setStepCount(Axis::Alt, motion::altDegreesToSteps(altDeg));
   }
   storage::setPolarAligned(true);
+  applyOrientationState(true);
   setUiState(UiState::StatusScreen);
   bool trackingStarted = startTrackingCurrentOrientation();
   showInfo(trackingStarted ? "Tracking Polaris" : "Polaris locked");
@@ -2816,7 +2933,8 @@ void startPolarAlignment() {
   systemState.polarAligned = false;
   systemState.trackingActive = false;
   systemState.gotoActive = false;
-  stopTracking();
+  applyOrientationState(false);
+  storage::setPolarAligned(false);
   setUiState(UiState::PolarAlign);
   showInfo("Use joystick", 2000);
 }

@@ -32,6 +32,7 @@ void applyCalibration(const AxisCalibration& calibration);
 void setBacklash(const BacklashConfig& backlash);
 int32_t getBacklashSteps(Axis axis);
 int8_t getLastDirection(Axis axis);
+void setAltitudeLimitsEnabled(bool enabled);
 
 #if defined(DEVICE_ROLE_MAIN)
 void motorTaskLoop();

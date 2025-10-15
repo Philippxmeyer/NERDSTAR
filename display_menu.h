@@ -16,6 +16,8 @@ void showCalibrationStart();
 void showCalibrationResult(int centerX, int centerY);
 void showReady();
 void startTask();
+void prepareStartupLockPrompt(bool hasSavedLock);
+void setOrientationKnown(bool known);
 void handleInput();
 void showInfo(const String& message, uint32_t durationMs = 3000);
 void completePolarAlignment();

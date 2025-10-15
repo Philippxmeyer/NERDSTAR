@@ -59,6 +59,7 @@ void setup() {
   motion::init();
   motion::applyCalibration(storage::getConfig().axisCalibration);
   motion::setBacklash(storage::getConfig().backlash);
+  display_menu::prepareStartupLockPrompt(systemState.polarAligned);
   display_menu::showReady();
   display_menu::startTask();
 
@@ -72,6 +73,7 @@ void setup() {
     display_menu::showInfo("Mount link offline", 2000);
   }
   systemState.mountLinkReady = g_mountLinkReady;
+  display_menu::setOrientationKnown(systemState.polarAligned);
 
   if (!catalog::init()) {
     display_menu::showInfo("Catalog missing", 2000);
@@ -130,6 +132,7 @@ void loop() {
         g_linkActiveSinceMs = 0;
         systemState.manualCommandOk = true;
         display_menu::showInfo("Mount link ready", 2000);
+        display_menu::setOrientationKnown(systemState.polarAligned);
         if (Serial) {
           Serial.println("[HID] Mount link re-established");
         }
@@ -307,6 +310,11 @@ void handleRequest(const comm::Request& request) {
     config.azSteps = static_cast<int32_t>(request.params[0].toInt());
     config.altSteps = static_cast<int32_t>(request.params[1].toInt());
     motion::setBacklash(config);
+    comm::sendOk(request.id, {});
+  } else if (cmd == "SET_ALT_LIMITS_ENABLED") {
+    if (!requireParams(1)) return;
+    bool enabled = request.params[0] == "1";
+    motion::setAltitudeLimitsEnabled(enabled);
     comm::sendOk(request.id, {});
   } else if (cmd == "GET_BACKLASH") {
     if (!requireParams(1)) return;
